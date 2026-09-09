@@ -16,6 +16,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.config import get_settings
+from app.security import rate_limit
 from app.models import (
     ACTION_CANCEL,
     DECISION_DENIED,
@@ -57,7 +58,17 @@ def test_the_fifth_wrong_guess_locks_the_guesser(api, session_id, booked, db):
     record = booked(name="Ahmed Khan")
     _burn_the_budget(api, session_id, record)
 
-    bucket = db.execute(select(RateLimitBucket)).scalars().one()
+    # Scoped, because F8 added counting budgets that share this table. The
+    # lockout is one bucket among several and must be read as such.
+    bucket = (
+        db.execute(
+            select(RateLimitBucket).where(
+                RateLimitBucket.scope == rate_limit.SCOPE_CANCEL_REFERENCE
+            )
+        )
+        .scalars()
+        .one()
+    )
     assert bucket.count >= get_settings().max_reference_attempts
 
     # The guesser is refused even holding the correct reference, and refused

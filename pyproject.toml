@@ -21,6 +21,20 @@ dev = [
     "httpx>=0.27",
     "freezegun>=1.5",
 ]
+# F9. Kept out of the default install: the tester is a development tool, and the
+# API must never need it to run. Its testable parts (signing, redaction, the
+# audit reader, the production guard) import no Streamlit, so `uv run pytest`
+# covers them without this group.
+#
+# One coupling worth knowing about before it surprises somebody: uv resolves
+# every group into one lockfile, and streamlit caps `websockets<17` while
+# uvicorn[standard] only asks for `>=13`. Adding this group therefore moved the
+# locked websockets from 17.1 to 16.1.1 for the runtime too. Verified fine —
+# nothing here uses websockets directly and uvicorn's protocol works on 16 — but
+# when F12 brings in Pipecat, this cap is the first place to look.
+tester = [
+    "streamlit>=1.40",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

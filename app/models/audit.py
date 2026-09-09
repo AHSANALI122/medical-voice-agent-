@@ -10,6 +10,8 @@ from app.models.base import Base, UtcDateTime, utcnow
 # Actions
 ACTION_BOOK = "book_appointment"
 ACTION_CANCEL = "cancel_appointment"
+ACTION_RATE_LIMIT = "rate_limit"
+ACTION_ESCALATE = "escalate_emergency"
 
 # Decisions
 DECISION_ALLOWED = "allowed"
@@ -24,6 +26,8 @@ REASON_LOCKED = "appointment_locked"
 REASON_ALREADY_CANCELLED = "already_cancelled"
 REASON_SLOT_TAKEN = "slot_taken"
 REASON_IDEMPOTENT_REPLAY = "idempotent_replay"
+REASON_RATE_LIMITED = "rate_limited"
+REASON_EMERGENCY_KEYWORD = "emergency_keyword"
 
 
 class AuditEvent(Base):

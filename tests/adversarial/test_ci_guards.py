@@ -33,6 +33,21 @@ def test_import_boundary_check_catches_a_violation(tmp_path: Path):
     assert "imports app.services.booking" in result.stdout
 
 
+def test_import_boundary_check_covers_the_tester_too(tmp_path: Path):
+    """C-13. The Streamlit tester is not a backdoor because it cannot reach the
+    service layer, not because nobody has written the import yet.
+    """
+    tester = tmp_path / "tester"
+    tester.mkdir()
+    (tester / "shortcut.py").write_text(
+        "from app.security.reference import match_cancellation_candidate\n",
+        encoding="utf-8",
+    )
+    result = _run("check_import_boundary.py", tmp_path)
+    assert result.returncode == 1
+    assert "imports app.security.reference" in result.stdout
+
+
 def test_import_boundary_check_passes_on_an_http_only_agent(tmp_path: Path):
     agent = tmp_path / "agent" / "pipecat"
     agent.mkdir(parents=True)

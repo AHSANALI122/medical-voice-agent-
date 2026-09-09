@@ -80,28 +80,38 @@ class SignedClient:
     path into the API, which is the point of C-13.
     """
 
-    def __init__(self, client: TestClient, channel: str = "web") -> None:
+    def __init__(
+        self, client: TestClient, channel: str = "web", call_id: str | None = None
+    ) -> None:
         self.client = client
         self.channel = channel
+        self.call_id = call_id
 
-    def post(self, path: str, payload: dict, *, channel: str | None = None):
+    def post(
+        self,
+        path: str,
+        payload: dict,
+        *,
+        channel: str | None = None,
+        call_id: str | None = None,
+    ):
         channel = channel or self.channel
+        call_id = call_id if call_id is not None else self.call_id
         body = json.dumps(payload).encode()
         timestamp = str(int(time.time()))
         nonce = uuid.uuid4().hex
         secret = get_settings().channel_secret(channel)
-        signature = request_auth.sign(secret, timestamp, nonce, body)
-        return self.client.post(
-            path,
-            content=body,
-            headers={
-                "content-type": "application/json",
-                "x-vb-channel": channel,
-                "x-vb-timestamp": timestamp,
-                "x-vb-nonce": nonce,
-                "x-vb-signature": signature,
-            },
-        )
+        signature = request_auth.sign(secret, timestamp, nonce, body, call_id or "")
+        headers = {
+            "content-type": "application/json",
+            "x-vb-channel": channel,
+            "x-vb-timestamp": timestamp,
+            "x-vb-nonce": nonce,
+            "x-vb-signature": signature,
+        }
+        if call_id:
+            headers["x-vb-call-id"] = call_id
+        return self.client.post(path, content=body, headers=headers)
 
     def raw_post(self, path: str, body: bytes, headers: dict):
         return self.client.post(path, content=body, headers=headers)

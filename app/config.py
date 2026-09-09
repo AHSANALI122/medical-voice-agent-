@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     vb_database_path: str = "data/voicebook.db"
     vb_clinic_timezone: str = "Asia/Karachi"
 
+    # F10 — where an emergency is routed. Configurable because the right number
+    # is a deployment fact, not a code fact.
+    vb_emergency_service_name: str = "Rescue 1122"
+    vb_emergency_number: str = "1122"
+
     # F1 / C-29 — schedule enumeration limits.
     max_slots_returned: int = 5
     slot_horizon_days: int = 14
@@ -64,6 +69,18 @@ class Settings(BaseSettings):
     # booking; locking the caller costs the attacker and nobody else.
     max_reference_attempts: int = 5
     reference_lock_minutes: int = 60
+
+    # F8 / C-07, C-14 — abuse budgets. Every one of these is configuration, and
+    # every one is persisted, so a reconnect resets nothing (C-23).
+    abuse_window_hours: int = 24
+    # "A 4th call from one source inside 24h is refused" (F8 acceptance).
+    max_sessions_per_ip_per_day: int = 3
+    max_sessions_per_call_id_per_day: int = 3
+    # Soft layer: a name is neither secret nor verified, so this is friction and
+    # not a control. An abuser evades it by saying a different name.
+    max_bookings_per_name_per_day: int = 3
+    # Hard backstop: nothing the caller controls can move this one.
+    max_bookings_per_day_global: int = 200
 
     # How many proxies sit in front of this service. 0 means the peer address is
     # the client. Any other value reads that many hops back from the right of

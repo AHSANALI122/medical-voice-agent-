@@ -54,6 +54,18 @@ MUTATING_ENDPOINTS = [
         lambda sid: {"session_id": sid},
         lambda sid: {"session_id": sid, "unexpected": True},
     ),
+    # Both of these advance session state and screen_turn writes an audit row,
+    # so both are mutating and both owe the two independent assertions.
+    (
+        "/tools/screen_turn",
+        lambda sid: {"session_id": sid, "utterance": "I would like to book"},
+        lambda sid: {"session_id": sid, "utterance": 47},
+    ),
+    (
+        "/tools/resolve_date",
+        lambda sid: {"session_id": sid, "phrase": "next Tuesday"},
+        lambda sid: {"session_id": sid, "phrase": 15},
+    ),
 ]
 
 UNKNOWN_SESSION = "aaaaaaaaaaaaaaaaaaaaaaaa"

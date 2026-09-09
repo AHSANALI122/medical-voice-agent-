@@ -20,8 +20,10 @@ from app.schemas.types import (
     PatientName,
     SessionId,
     SpecialtyQuery,
+    SpokenDate,
     SpokenFragment,
     StrictModel,
+    Utterance,
 )
 
 
@@ -67,6 +69,30 @@ class CreateSessionRequest(StrictModel):
     consent_given: bool = False
 
 
+class ResolveDateRequest(StrictModel):
+    """A spoken date phrase, resolved against the clinic calendar (F7).
+
+    `for_cancellation` widens the answer to include earlier today, because an
+    appointment at nine this morning is an ordinary thing to want to cancel at
+    ten. It grants no authority: the reference check is untouched by it.
+    """
+
+    session_id: SessionId
+    phrase: SpokenDate
+    for_cancellation: bool = False
+
+
+class ScreenTurnRequest(StrictModel):
+    """One turn of caller speech, screened and thrown away (F10).
+
+    The utterance is the only free text in this API that may contain symptoms.
+    It is never persisted, never logged, and never echoed in the response.
+    """
+
+    session_id: SessionId
+    utterance: Utterance
+
+
 # --------------------------------------------------------------- responses
 
 
@@ -77,7 +103,16 @@ class DoctorOffer(StrictModel):
 
 
 class SearchDoctorsResult(StrictModel):
+    """`resolution` tells the agent whether to proceed or to ask (F6).
+
+    "ambiguous" means the server found more than one candidate and refused to
+    pick. The agent's only correct move is to read the candidates back and let
+    the caller choose — a doctor list is public, so naming them aloud is safe
+    here in a way it never is for patients (C-33).
+    """
+
     results: list[DoctorOffer]
+    resolution: str
 
 
 class SlotOffer(StrictModel):
@@ -118,6 +153,36 @@ class CreateSessionResult(StrictModel):
     session_id: str
     state: str
     disclosure: str
+
+
+class ResolveDateResult(StrictModel):
+    """`spoken` is the readback, and it is the point.
+
+    No parser settles what "next Tuesday" means. Reading the resolved date back
+    to the caller catches a misparse in the same turn, which is cheaper than any
+    amount of parser cleverness — the standing move of designing so an
+    unreliable component's failures are harmless.
+    """
+
+    outcome: str
+    resolved_date: str | None
+    spoken: str | None
+    clarification: str | None
+
+
+class ScreenTurnResult(StrictModel):
+    """`reply`, when present, is the exact text the agent must speak.
+
+    The server supplies the words rather than a hint, because a safety message
+    the model composes is a safety message the model can be talked out of. When
+    `blocks_flow` is true the agent says `reply` and nothing else this turn.
+    """
+
+    verdict: str
+    reply: str | None
+    blocks_flow: bool
+    escalated: bool
+    state: str
 
 
 class UniformFailure(StrictModel):

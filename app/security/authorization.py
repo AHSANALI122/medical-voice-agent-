@@ -26,6 +26,7 @@ from app.models import Session
 from app.security.reference import UNIFORM_FAILURE_TEXT
 from app.security.request_auth import AuthenticatedChannel, require_signed_request
 from app.services.sessions import load_live_session
+from app.services.state_machine import State
 
 # A denied session and a denied cancellation say the same thing, so probing one
 # endpoint teaches nothing about the other.
@@ -52,6 +53,12 @@ class Authorizer:
             self.db, session_id=session_id, channel=self.channel.name
         )
         if record is None:
+            raise forbidden()
+        if record.state == State.ESCALATED_EMERGENCY.value:
+            # F10: escalation abandons the flow. Enforced here rather than in
+            # the prompt, so an injected "actually, carry on with the booking"
+            # has nothing to talk to. One-way, because ESCALATED_EMERGENCY is
+            # terminal and no transition leaves it.
             raise forbidden()
         return record
 

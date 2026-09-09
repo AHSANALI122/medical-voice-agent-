@@ -24,12 +24,23 @@ HEADER_CHANNEL = "x-vb-channel"
 HEADER_TIMESTAMP = "x-vb-timestamp"
 HEADER_NONCE = "x-vb-nonce"
 HEADER_SIGNATURE = "x-vb-signature"
+HEADER_CALL_ID = "x-vb-call-id"
 
 _UNAUTHENTICATED = "unauthenticated request"
 
+# A platform call identifier: Vapi's call id, or whatever the web channel mints
+# per connection. Bounded and drawn from a closed character set before it is
+# used for anything, because it becomes a rate-limit key.
+_CALL_ID_ALLOWED = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+)
+MAX_CALL_ID_LENGTH = 64
 
-def sign(secret: bytes, timestamp: str, nonce: str, raw_body: bytes) -> str:
-    """Canonical form: timestamp, nonce, then the raw bytes as sent.
+
+def sign(
+    secret: bytes, timestamp: str, nonce: str, raw_body: bytes, call_id: str = ""
+) -> str:
+    """Canonical form: timestamp, nonce, call id, then the raw bytes as sent.
 
     Signing the raw body rather than a re-serialized copy means a tampered byte
     anywhere in the payload breaks the signature, including in a field this
@@ -41,8 +52,22 @@ def sign(secret: bytes, timestamp: str, nonce: str, raw_body: bytes) -> str:
     nonce is byte-identical to an attacker replaying a captured request. With
     one, a retry is a new request that the idempotency layer recognizes (F15),
     while a replay reuses a spent nonce and is refused.
+
+    The call id is in there for a different reason. It is a rate-limit key (F8),
+    and an unsigned header is a key the caller picks — which is the same failure
+    the X-Forwarded-For handling below exists to avoid. An abuser who can mint a
+    fresh call id per request has no call budget at all. Signed, it is as
+    trustworthy as the channel secret, and no more: the source-IP budget is the
+    one that still binds a client that has gone hostile.
     """
-    message = timestamp.encode("ascii") + b"." + nonce.encode("ascii") + b"." + raw_body
+    message = b".".join(
+        (
+            timestamp.encode("ascii"),
+            nonce.encode("ascii"),
+            call_id.encode("ascii"),
+            raw_body,
+        )
+    )
     return hmac.new(secret, message, hashlib.sha256).hexdigest()
 
 
@@ -88,10 +113,15 @@ def get_replay_cache() -> ReplayCache:
 
 @dataclass(frozen=True)
 class AuthenticatedChannel:
-    """Proof of a known client. Carries no authority over any record."""
+    """Proof of a known client. Carries no authority over any record.
+
+    `call_id` is a budget key, not an identity: two calls sharing one are the
+    same platform call, which says nothing about who is speaking.
+    """
 
     name: str
     client_ip: str
+    call_id: str | None = None
 
 
 UNKNOWN_IP = "unknown"
@@ -129,12 +159,19 @@ async def require_signed_request(
     x_vb_timestamp: str | None = Header(default=None),
     x_vb_nonce: str | None = Header(default=None),
     x_vb_signature: str | None = Header(default=None),
+    x_vb_call_id: str | None = Header(default=None),
 ) -> AuthenticatedChannel:
     if not x_vb_channel or not x_vb_timestamp or not x_vb_nonce or not x_vb_signature:
         raise _reject()
 
     nonce = x_vb_nonce.strip()
     if not 8 <= len(nonce) <= 64 or not nonce.isalnum():
+        raise _reject()
+
+    call_id = (x_vb_call_id or "").strip()
+    if call_id and (
+        len(call_id) > MAX_CALL_ID_LENGTH or set(call_id) - _CALL_ID_ALLOWED
+    ):
         raise _reject()
 
     channel = x_vb_channel.strip().lower()
@@ -155,7 +192,7 @@ async def require_signed_request(
         raise _reject()
 
     raw_body = await request.body()
-    expected = sign(secret, x_vb_timestamp, nonce, raw_body)
+    expected = sign(secret, x_vb_timestamp, nonce, raw_body, call_id)
 
     if not hmac.compare_digest(expected, x_vb_signature.strip()):
         raise _reject()
@@ -165,4 +202,6 @@ async def require_signed_request(
     if get_replay_cache().seen_before(f"{channel}:{nonce}"):
         raise _reject()
 
-    return AuthenticatedChannel(name=channel, client_ip=client_ip(request))
+    return AuthenticatedChannel(
+        name=channel, client_ip=client_ip(request), call_id=call_id or None
+    )

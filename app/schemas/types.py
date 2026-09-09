@@ -106,4 +106,14 @@ SessionId = Annotated[str, Field(min_length=8, max_length=64, pattern=r"^[A-Za-z
 
 SpokenFragment = Annotated[str, Field(min_length=1, max_length=64)]
 
+# One turn of speech, screened by F10 and then discarded. Bounded so a caller
+# cannot post a novel; never normalized here, because normalizing it would be the
+# first step toward keeping it.
+Utterance = Annotated[str, Field(min_length=1, max_length=1000)]
+
+# A spoken date phrase on its way to the F7 parser. Bounded, and nothing more:
+# the parser is a pure function over an in-memory vocabulary, so an unparseable
+# phrase is answered with a question rather than rejected at the boundary.
+SpokenDate = Annotated[str, Field(min_length=1, max_length=64)]
+
 SpecialtyQuery = Annotated[str, Field(min_length=2, max_length=40)]

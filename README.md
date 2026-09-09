@@ -3,24 +3,33 @@
 A voice agent for medical appointment booking, designed on the assumption that
 the language model driving it is compromised.
 
-**Status:** F0–F5 implemented (schema, slot engine, state machine, tool
-endpoints, request authentication, and the booking-reference authority spine).
-F6–F17 are specified in `spec.md` and not yet built.
+**Status:** F0–F10 implemented (schema, slot engine, state machine, tool
+endpoints, request authentication, the booking-reference authority spine, entity
+resolution, relative dates, abuse budgets, the Streamlit tester, and the safety
+pre-filter). F11–F17 are specified in `spec.md` and not yet built.
 
 ---
 
-## The design in four lines
+## The design in five lines
 
 1. **Authority never flows through the model.** The LLM cannot cancel anything.
    It relays a name, a date and four digits; the server decides. There is no
    privilege in the prompt to escalate.
 2. **The trust boundary is enforced by CI, not by discipline.** Nothing under
-   `agent/` may import `app/services`, `app/db`, `app/models`, `app/security` or
-   `app/tools`. `scripts/check_import_boundary.py` fails the build if it does.
-3. **Validation is not authorization.** Pydantic rejects malformed input with
+   `agent/` or `tester/` may import `app/services`, `app/db`, `app/models`,
+   `app/security` or `app/tools`. `scripts/check_import_boundary.py` fails the
+   build if it does. That is also the whole answer to "is the test tool a
+   backdoor?" — it cannot reach the service layer, rather than merely not
+   reaching it today.
+3. **Safety is a pre-filter, not a prompt instruction.** The emergency
+   interrupt runs before the state machine on every turn, in pure Python, with
+   no provider in its path — it keeps working with every provider stubbed
+   unreachable. The LLM classifier is additive: it can add an escalation, never
+   remove one.
+4. **Validation is not authorization.** Pydantic rejects malformed input with
    422. A separate layer rejects unauthorized input with 403. Every mutating
    endpoint asserts both, independently.
-4. **The security scope is stated, not implied.** See below.
+5. **The security scope is stated, not implied.** See below.
 
 ## Accepted risk (spec §2)
 
@@ -63,10 +72,36 @@ Without a `.env`, a development boot generates ephemeral keys and says so in the
 log. Under `ENV=production` every key is mandatory and `DEMO_MODE=true` refuses
 to start.
 
+### The text tester
+
+```bash
+uv sync --group tester
+uv run streamlit run tester/app.py
+```
+
+The whole flow — book and cancel — in text, so the authority check can be
+debugged without a microphone in the way. It signs every request with the
+`tester` channel secret over HTTP, exactly as the phone and web channels do:
+there is no privileged path, no test-only endpoint, and no way to cancel without
+the reference. It refuses to run under `ENV=production`.
+
+The panel on the right shows each tool call with its arguments, status and
+latency, plus the audit rows the conversation produced. The reference is masked
+in that log — a call log is a transcript, and a reference must not outlive the
+moment it was disclosed in. Audit rows are read straight from the database over a
+read-only connection rather than through an endpoint, because an `/audit`
+endpoint built for the tester would be exactly the extra surface F9 forbids.
+
+One thing that surprises everyone once: the tester shares an IP with you, and
+F8 refuses a fourth call from one source in 24 hours. That is the spec's number
+and it is not softened for the tester. Raise it locally instead —
+`MAX_SESSIONS_PER_IP_PER_DAY=50` in your `.env`. Every limit is configuration;
+none of them is a code path.
+
 ## Checks
 
 ```bash
-uv run pytest                                   # 129 tests
+uv run pytest                                   # 380 tests
 uv run pytest tests/adversarial                 # required before any commit
                                                 # touching app/security or app/tools
 uv run python scripts/check_import_boundary.py  # C-19
@@ -84,14 +119,17 @@ reads as a 60 ms leak that is not there.
 ```
 app/            FastAPI — the only trusted zone
   models/       SQLAlchemy
-  services/     slot engine, state machine, sessions, digits, booking
+  services/     slots, state machine, sessions, digits, booking, directory,
+                dates, safety
   tools/        /tools/* endpoints — thin, no logic
   security/     HMAC request auth, AES-GCM, reference match, abuse budgets
   db/           engine, WAL, synthetic seed
+tester/         Streamlit text tester — HTTP client only, no app imports
 tests/
-  unit/         F0, F1, F2, F5, configuration guards
-  contract/     422 and 403 asserted separately per mutating endpoint
-  adversarial/  existence oracle, brute force, injection, homonym, CI guards
+  unit/         F0, F1, F2, F5, F6, F7, configuration guards
+  contract/     422 and 403 per mutating endpoint; the tester's signed path
+  adversarial/  existence oracle, brute force, injection, homonym, rate
+                limits, safety, CI guards
 scripts/        the two CI guards and a key generator
 spec.md         the specification this is built against
 ```
