@@ -1,0 +1,32 @@
+[project]
+name = "voicebook"
+version = "0.1.0"
+description = "Voice-driven medical appointment agent — authority never flows through the model"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy>=2.0.36",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "cryptography>=43.0",
+    "python-dateutil>=2.9",
+    "tzdata>=2024.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "freezegun>=1.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["slow: timing-sensitive checks that take a moment"]
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.uv]
+package = false
