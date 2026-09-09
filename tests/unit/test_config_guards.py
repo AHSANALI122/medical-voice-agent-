@@ -20,6 +20,7 @@ def _keys() -> dict[str, str]:
             "vb_channel_secret_web",
             "vb_channel_secret_phone",
             "vb_channel_secret_tester",
+            "vb_room_token_key",
         )
     }
 
@@ -39,6 +40,7 @@ def test_production_refuses_to_start_without_keys(monkeypatch):
         "VB_CHANNEL_SECRET_WEB",
         "VB_CHANNEL_SECRET_PHONE",
         "VB_CHANNEL_SECRET_TESTER",
+        "VB_ROOM_TOKEN_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -51,6 +53,10 @@ def test_production_starts_with_every_key_present():
     settings = Settings(env="production", demo_mode=False, _env_file=None, **_keys())
     assert len(settings.encryption_key) == 32
     assert len(settings.reference_hmac_key) == 32
+    # F12 — the browser's room-token key is required in production like every
+    # other one. A generated-per-boot key would invalidate every token in flight
+    # on a restart, which on a free tier is a routine event.
+    assert len(settings.room_token_key) == 32
 
 
 def test_development_generates_ephemeral_keys_rather_than_shipping_one(caplog):

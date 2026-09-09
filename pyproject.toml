@@ -11,6 +11,9 @@ dependencies = [
     "pydantic-settings>=2.6",
     "cryptography>=43.0",
     "python-dateutil>=2.9",
+    # Declared rather than relied on transitively through pydantic-settings:
+    # agent/ reads .env itself, because it cannot import app.config (C-19).
+    "python-dotenv>=1.0",
     "tzdata>=2024.2",
 ]
 

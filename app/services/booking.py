@@ -45,6 +45,28 @@ class SlotTaken(Exception):
     """Lost the race. The caller is offered fresh slots, never an error."""
 
 
+def scoped_idempotency_key(*, channel: str, session_id: str, client_key: str) -> str:
+    """Namespace a client-supplied idempotency key (F15).
+
+    The scoping is a security control, not tidiness. A replay of this key hands
+    back the original booking reference in plaintext, which is the whole
+    authority to cancel that appointment (section 5.2). The key itself arrives
+    from the agent layer, and section 8 says to assume the model will eventually
+    send attacker-chosen arguments — so the key's entropy cannot be the thing
+    protecting the reference.
+
+    Scoped to the session, it does not have to be. A session id is server-minted
+    with `secrets`, bound to one channel, and expires in 15 minutes; a caller who
+    can replay this key is a caller who already holds the session the reference
+    was disclosed to. Guessing another caller's key now buys nothing, because the
+    guesser's own session id is prepended to it.
+
+    The channel stays in the key so the same session id could never be replayed
+    across channels even if one were somehow leaked between them.
+    """
+    return f"{channel}:{session_id}:{client_key}"
+
+
 @dataclass(frozen=True)
 class BookingResult:
     appointment_id: int
@@ -75,6 +97,28 @@ def _find_or_create_patient(db: OrmSession, name: str) -> Patient:
     db.add(patient)
     db.flush()
     return patient
+
+
+def is_replay(db: OrmSession, idempotency_key: str) -> bool:
+    """Has this exact scoped key already produced an appointment?
+
+    Asked by the endpoint before it charges the daily booking budget. A replay
+    creates no row and takes no slot, so gating it behind a cap that exists to
+    protect slots refuses a caller who has not consumed anything — and refuses
+    them at the worst possible moment, because the retry is how they recover a
+    reference whose confirmation was lost on the wire.
+
+    This opens no bypass. A key only answers True here once a row already exists
+    under it, and creating that row is what cost the budget in the first place.
+    """
+    return (
+        db.execute(
+            select(Appointment.id)
+            .where(Appointment.idempotency_key == idempotency_key)
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 def book(

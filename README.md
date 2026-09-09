@@ -101,12 +101,19 @@ none of them is a code path.
 ## Checks
 
 ```bash
-uv run pytest                                   # 380 tests
-uv run pytest tests/adversarial                 # required before any commit
-                                                # touching app/security or app/tools
-uv run python scripts/check_import_boundary.py  # C-19
+uv run pytest                                    # 569 tests
+uv run pytest tests/adversarial                  # required before any commit
+                                                 # touching app/security or app/tools
+uv run python -m evals                           # the 25 scripted conversations
+uv run python scripts/check_import_boundary.py   # C-19
 uv run python scripts/check_sql_interpolation.py # C-11
+uv run python scripts/check_client_bundle.py     # C-16 — no key in the browser
 ```
+
+Ten of the twenty-five evals are attacks and they gate the build: they run under
+`tests/adversarial/test_f11_evals.py`, each on its own database, and each ends
+on an assertion about what the database holds rather than about what the agent
+said. `uv run python -m evals --transcripts` prints the same run as a report.
 
 Measured for F5's timing acceptance criterion (100 interleaved samples each,
 matcher level): no-match and wrong-reference medians differ by **0.28 ms**, p95
@@ -122,15 +129,25 @@ app/            FastAPI — the only trusted zone
   services/     slots, state machine, sessions, digits, booking, directory,
                 dates, safety
   tools/        /tools/* endpoints — thin, no logic
-  security/     HMAC request auth, AES-GCM, reference match, abuse budgets
+  security/     HMAC request auth, AES-GCM, reference match, abuse budgets,
+                transcript redaction
+  web/          room tokens and the browser's config — the only unauthenticated
+                surface, and it hands out nothing but a 60-second room key
   db/           engine, WAL, synthetic seed
+agent/          the voice layer — an HTTP client and nothing else from this
+                codebase (CI-enforced)
+  pipecat/      web channel; the browser bundle holds no key of any kind
+  vapi/         phone channel; outbound absent, duration capped both sides
 tester/         Streamlit text tester — HTTP client only, no app imports
+evals/          25 scripted conversations, 15 happy and 10 attacks
 tests/
-  unit/         F0, F1, F2, F5, F6, F7, configuration guards
-  contract/     422 and 403 per mutating endpoint; the tester's signed path
+  unit/         F0, F1, F2, F5, F6, F7, F11 redaction, configuration guards
+  contract/     422 and 403 per mutating endpoint; the tester's signed path;
+                the web and phone agents, including web/phone parity
   adversarial/  existence oracle, brute force, injection, homonym, rate
-                limits, safety, CI guards
-scripts/        the two CI guards and a key generator
+                limits, safety, cancellation, idempotency, observability,
+                the eval suite, CI guards
+scripts/        the three CI guards and a key generator
 spec.md         the specification this is built against
 ```
 

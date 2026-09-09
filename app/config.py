@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     vb_channel_secret_phone: str = ""
     vb_channel_secret_tester: str = ""
 
+    # F12 — the key the browser's room token is signed with. Distinct from every
+    # channel secret because it protects a different thing and lives a different
+    # length of time: a channel secret authenticates a server-side process, this
+    # one authorizes one browser to join one room for one minute.
+    vb_room_token_key: str = ""
+
+    # F13 — the secret Vapi signs its webhooks with. Nothing in this repository
+    # signs with it; the agent only ever verifies. It is separate from
+    # VB_CHANNEL_SECRET_PHONE on purpose: one is Vapi proving it is Vapi to the
+    # agent, the other is the agent proving it is a known channel to the API.
+    vb_vapi_webhook_secret: str = ""
+
     vb_database_path: str = "data/voicebook.db"
     vb_clinic_timezone: str = "Asia/Karachi"
 
@@ -93,6 +105,27 @@ class Settings(BaseSettings):
 
     session_ttl_minutes: int = 15
 
+    # F12 — a room token is good for one minute. Short because it is minted for
+    # an unauthenticated browser: the browser holds no channel secret, so the
+    # token's own lifetime is the whole of its containment.
+    room_token_ttl_seconds: int = 60
+    # F12 / C-18 — state-dependent VAD silence thresholds. They live here rather
+    # than in `agent/` because the browser has to be told them and `app/` must
+    # never import `agent/`; the *policy* that maps a state to one of them is
+    # `agent.vad`, where the pipeline that applies it lives.
+    vad_default_silence_ms: int = 700
+    vad_digit_silence_ms: int = 1200
+    # A separate budget from the call budget, so a legitimate mint-then-connect
+    # does not spend two of the caller's three daily calls. Headroom for a
+    # reconnect or two, and no more.
+    max_room_tokens_per_ip_per_day: int = 6
+
+    # F13 — the server half of the duration cap. Vapi enforces its own at the
+    # platform; this one exists because a cap that only the platform enforces is
+    # a cap the platform can be misconfigured out of. Ten minutes is far longer
+    # than any booking conversation and far shorter than a toll-fraud call.
+    max_call_seconds: int = 600
+
     @field_validator("env")
     @classmethod
     def _normalize_env(cls, v: str) -> str:
@@ -112,6 +145,7 @@ class Settings(BaseSettings):
             "VB_CHANNEL_SECRET_WEB": "vb_channel_secret_web",
             "VB_CHANNEL_SECRET_PHONE": "vb_channel_secret_phone",
             "VB_CHANNEL_SECRET_TESTER": "vb_channel_secret_tester",
+            "VB_ROOM_TOKEN_KEY": "vb_room_token_key",
         }
         for env_name, attr in required.items():
             if getattr(self, attr):
@@ -135,6 +169,10 @@ class Settings(BaseSettings):
     @property
     def reference_hmac_key(self) -> bytes:
         return _b64d(self.vb_reference_hmac_key, "VB_REFERENCE_HMAC_KEY")
+
+    @property
+    def room_token_key(self) -> bytes:
+        return _b64d(self.vb_room_token_key, "VB_ROOM_TOKEN_KEY")
 
     @property
     def clinic_tz(self) -> ZoneInfo:

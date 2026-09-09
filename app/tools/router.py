@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session as OrmSession
 
 from app.config import get_settings
@@ -25,6 +25,7 @@ from app.models import (
     REASON_EMERGENCY_KEYWORD,
     REASON_RATE_LIMITED,
 )
+from app.observability import stamp
 from app.schemas.tools import (
     AppendDigitsRequest,
     BookAppointmentRequest,
@@ -120,6 +121,7 @@ def _local(dt_utc: datetime) -> datetime:
 @router.post("/create_session", response_model=CreateSessionResult)
 def create_session(
     payload: CreateSessionRequest,
+    request: Request,
     channel: AuthenticatedChannel = Depends(require_signed_request),
     db: OrmSession = Depends(db_session),
 ) -> CreateSessionResult:
@@ -131,6 +133,10 @@ def create_session(
         rate_limit.require_call_budget(
             db, client_ip=channel.client_ip, call_id=channel.call_id
         )
+        # F13 — the server half of the duration cap. A call that has already run
+        # past it does not get to open a fresh session and start again; that is
+        # exactly the loophole a per-session cap would leave.
+        rate_limit.require_call_within_duration(db, call_id=channel.call_id)
     except rate_limit.RateLimited as exc:
         raise _refuse_over_budget(db, exc, channel=channel.name) from None
 
@@ -138,7 +144,12 @@ def create_session(
     rate_limit.consume_call_budget(
         db, client_ip=channel.client_ip, call_id=channel.call_id
     )
+    # Starts the clock only on the first session of a call; a reconnect finds it
+    # already running and cannot restart it (C-23).
+    rate_limit.start_call_clock(db, call_id=channel.call_id)
     db.commit()
+    # The one endpoint the Authorizer never sees, so it stamps its own id (F11).
+    stamp(request, session_id=session.id, turn=session.turn_count)
     return CreateSessionResult(
         session_id=session.id, state=session.state, disclosure=DISCLOSURE
     )
@@ -178,6 +189,7 @@ def resolve_date(
 @router.post("/screen_turn", response_model=ScreenTurnResult)
 def screen_turn(
     payload: ScreenTurnRequest,
+    request: Request,
     authz: Authorizer = Depends(get_authorizer),
 ) -> ScreenTurnResult:
     """The F10 pre-filter. Every turn, before the state machine, every channel.
@@ -197,6 +209,10 @@ def screen_turn(
     screening = safety.screen(payload.utterance, classifier=safety.get_classifier())
 
     if screening.escalated:
+        # F11 — the escalation flag on the event, and nothing about what
+        # triggered it. The matched phrase is symptom text and this is not a
+        # permitted hiding place for it either.
+        stamp(request, escalated=True)
         sessions.mark_outcome(session, State.ESCALATED_EMERGENCY)
         audit.record(
             authz.db,
@@ -322,12 +338,23 @@ def book_appointment(
         raise forbidden()
 
     normalized = normalize_name(payload.patient_name)
-    try:
-        rate_limit.require_booking_budget(authz.db, normalized_name=normalized)
-    except rate_limit.RateLimited as exc:
-        raise _refuse_over_budget(
-            authz.db, exc, channel=authz.channel.name, session_id=session.id
-        ) from None
+    idempotency_key = booking.scoped_idempotency_key(
+        channel=authz.channel.name,
+        session_id=session.id,
+        client_key=payload.idempotency_key,
+    )
+
+    # The budget gate is skipped for a replay (F15). A caller whose Nth booking
+    # succeeded but whose confirmation was lost has already spent that unit; a
+    # 429 on the retry would refuse them the one call that hands their reference
+    # back, and the reference is unrecoverable after that.
+    if not booking.is_replay(authz.db, idempotency_key):
+        try:
+            rate_limit.require_booking_budget(authz.db, normalized_name=normalized)
+        except rate_limit.RateLimited as exc:
+            raise _refuse_over_budget(
+                authz.db, exc, channel=authz.channel.name, session_id=session.id
+            ) from None
 
     try:
         result = booking.book(
@@ -336,7 +363,7 @@ def book_appointment(
             start_utc=datetime.fromisoformat(offer.start_utc),
             end_utc=datetime.fromisoformat(offer.end_utc),
             patient_name=payload.patient_name,
-            idempotency_key=f"{authz.channel.name}:{payload.idempotency_key}",
+            idempotency_key=idempotency_key,
             session_id=session.id,
             channel=authz.channel.name,
         )

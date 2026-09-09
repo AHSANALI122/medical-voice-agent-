@@ -25,6 +25,19 @@ from app.models.audit import (
 from app.models.base import Base, UtcDateTime, utcnow
 from app.models.directory import RULE_AVAILABLE, RULE_BLACKOUT, AvailabilityRule, Doctor
 from app.models.meta import SEED_MARKER_KEY, SEED_MARKER_VALUE, Meta
+from app.models.observation import (
+    OUTCOME_CONFLICT,
+    OUTCOME_DENIED,
+    OUTCOME_ERROR,
+    OUTCOME_ESCALATED,
+    OUTCOME_INVALID,
+    OUTCOME_NOT_FOUND,
+    OUTCOME_OK,
+    OUTCOME_THROTTLED,
+    OUTCOME_UNAUTHENTICATED,
+    UNKNOWN_TOOL,
+    ObservabilityEvent,
+)
 from app.models.patient import Patient
 from app.models.rate_limit import RateLimitBucket
 from app.models.session import (
@@ -52,6 +65,16 @@ __all__ = [
     "DECISION_DENIED",
     "Doctor",
     "Meta",
+    "OUTCOME_CONFLICT",
+    "OUTCOME_DENIED",
+    "OUTCOME_ERROR",
+    "OUTCOME_ESCALATED",
+    "OUTCOME_INVALID",
+    "OUTCOME_NOT_FOUND",
+    "OUTCOME_OK",
+    "OUTCOME_THROTTLED",
+    "OUTCOME_UNAUTHENTICATED",
+    "ObservabilityEvent",
     "Patient",
     "REASON_ALREADY_CANCELLED",
     "REASON_AMBIGUOUS",
@@ -70,6 +93,7 @@ __all__ = [
     "STATUS_ACTIVE",
     "STATUS_CANCELLED",
     "STATUS_COMPLETED",
+    "UNKNOWN_TOOL",
     "Session",
     "UtcDateTime",
     "utcnow",

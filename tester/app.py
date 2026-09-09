@@ -18,13 +18,28 @@ Run it with:
 
 from __future__ import annotations
 
+import sys
 import uuid
+from pathlib import Path
 
-import streamlit as st
+# Streamlit runs this file as a script, not as a module, so `sys.path[0]` is
+# `tester/` rather than the repository root and `import tester.audit` fails.
+# Putting the root on the path is what makes the sibling imports below resolve.
+#
+# It does not weaken the trust boundary. That boundary is enforced by
+# `scripts/check_import_boundary.py`, which parses the AST of every file under
+# `tester/` and `agent/` and fails the build on an `app.services`, `app.db`,
+# `app.models`, `app.security` or `app.tools` import. Whether those modules are
+# *importable* was never the control — whether they are *imported* is.
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-from tester.audit import AuditUnavailable, read_events
-from tester.client import MASK, DEFAULT_BASE_URL, ToolClient, redact
-from tester.guard import assert_not_production
+import streamlit as st  # noqa: E402
+
+from tester.audit import AuditUnavailable, read_events  # noqa: E402
+from tester.client import MASK, DEFAULT_BASE_URL, ToolClient, redact  # noqa: E402
+from tester.guard import assert_not_production  # noqa: E402
 
 # First line of the app, before anything renders.
 ENV = assert_not_production()

@@ -18,6 +18,7 @@ for name in (
     "VB_CHANNEL_SECRET_WEB",
     "VB_CHANNEL_SECRET_PHONE",
     "VB_CHANNEL_SECRET_TESTER",
+    "VB_ROOM_TOKEN_KEY",
 ):
     os.environ.setdefault(
         name, base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")

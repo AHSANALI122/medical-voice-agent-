@@ -1,7 +1,12 @@
 __pycache__/
 *.pyc
 .venv/
+# Every .env variant, not just the exact name: a .env.local, a .env.bak or a
+# .env.production is the same secret in a different file, and `.env` alone
+# matches none of them.
 .env
+.env.*
+!.env.example
 *.db
 *.db-wal
 *.db-shm

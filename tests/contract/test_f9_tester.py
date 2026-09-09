@@ -307,3 +307,81 @@ def test_the_secret_comes_from_the_environment_only():
     assert tester_client.channel_secret(
         "tester", environ={"VB_CHANNEL_SECRET_TESTER": "AAAAAAAAAAAAAAAAAAAAAA"}
     )
+
+
+# --------------------------------------------------------------------------
+# Streamlit runs app.py as a script, not as a module
+# --------------------------------------------------------------------------
+
+
+def test_the_tester_imports_the_way_streamlit_runs_it():
+    """`streamlit run tester/app.py` puts `tester/` on `sys.path[0]`, not the
+    repository root, so `from tester.audit import ...` fails with
+    `ModuleNotFoundError: No module named 'tester'`.
+
+    The failure is invisible from outside: the Streamlit server starts, the port
+    answers, `/_stcore/health` says `ok`, and the traceback appears only in the
+    browser. So this asserts the thing a port check cannot — that the script's
+    imports resolve in the context Streamlit actually gives them.
+    """
+    import ast
+    import pathlib
+    import subprocess
+    import sys
+    import textwrap
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    app = root / "tester" / "app.py"
+
+    # Execute only app.py's import prologue — everything up to the first
+    # statement that touches Streamlit's runtime. Importing the whole file would
+    # need a live Streamlit session, which is not what is under test here.
+    tree = ast.parse(app.read_text(encoding="utf-8"))
+    prologue: list[ast.stmt] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", "") == "ENV" for t in node.targets
+        ):
+            break
+        # `from __future__` has to be the first statement of a file, and this
+        # snippet is spliced under a preamble. It has no bearing on whether the
+        # sibling imports resolve, which is what is under test.
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            continue
+        prologue.append(node)
+
+    source = ast.unparse(ast.Module(body=prologue, type_ignores=[]))
+    script = textwrap.dedent(
+        f"""
+        import sys, pathlib
+        # Exactly what `streamlit run` does: the script's own directory first.
+        sys.path.insert(0, str(pathlib.Path.cwd()))
+        __file__ = str(pathlib.Path("app.py").resolve())
+        {textwrap.indent(source, "        ").lstrip()}
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root / "tester",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
+
+
+def test_the_path_bootstrap_does_not_smuggle_in_the_service_layer():
+    """The bootstrap puts the repository root on `sys.path`, which makes `app.*`
+    importable. That is fine and is not the control: the boundary is enforced by
+    `scripts/check_import_boundary.py` parsing what is actually imported. This
+    asserts the tester still imports none of it.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    source = (root / "tester" / "app.py").read_text(encoding="utf-8")
+    for module in ("app.services", "app.db", "app.models", "app.security", "app.tools"):
+        assert f"import {module}" not in source
+        assert f"from {module}" not in source

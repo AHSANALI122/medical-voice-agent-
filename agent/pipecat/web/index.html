@@ -1,0 +1,163 @@
+<!doctype html>
+<!--
+  The browser client (F12 — C-27, C-16).
+
+  Two rules govern this file, and `scripts/check_client_bundle.py` fails the
+  build if either stops being true.
+
+  1. No secret is in here. Not a provider key, not a channel secret, not an
+     account id. Everything shipped to a browser is public; a key in a page is a
+     key in a public repository with extra steps. This page fetches a room id
+     and a sixty-second token from the server and holds nothing else.
+
+  2. The microphone is not touched until the consent gate is passed. C-27 is
+     specifically that a spoken disclosure is not consent on the web, because by
+     the time it is spoken the microphone is already live. So `getUserMedia` is
+     called from the click handler on the consent button and from nowhere else.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VoiceBook — appointment assistant</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        padding: 1.5rem;
+        box-sizing: border-box;
+      }
+      main { max-width: 34rem; width: 100%; }
+      h1 { font-size: 1.35rem; margin: 0 0 .75rem; }
+      .disclosure {
+        border: 1px solid currentColor;
+        border-radius: .5rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      .disclosure p { margin: 0 0 .6rem; }
+      .disclosure p:last-child { margin-bottom: 0; }
+      button {
+        font: inherit;
+        padding: .6rem 1.1rem;
+        border-radius: .4rem;
+        cursor: pointer;
+      }
+      button[disabled] { cursor: not-allowed; opacity: .55; }
+      #status { margin-top: 1rem; min-height: 1.5em; }
+      .emergency { font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>VoiceBook</h1>
+
+      <section class="disclosure" id="gate">
+        <p id="disclosure-text">Loading…</p>
+        <p class="emergency" id="emergency-text"></p>
+        <p>
+          This is a portfolio demo with synthetic data. Do not enter real
+          patient information. The demo database is reset on every redeploy.
+        </p>
+        <p>
+          <label>
+            <input type="checkbox" id="consent" />
+            I understand this call is recorded and handled by an AI assistant.
+          </label>
+        </p>
+        <button id="start" disabled>Allow microphone and start</button>
+      </section>
+
+      <p id="status" role="status" aria-live="polite"></p>
+    </main>
+
+    <script>
+      // Same origin. There is no provider endpoint in this file, because the
+      // browser never talks to a provider — the pipeline runs server-side.
+      const API = "";
+
+      const gate = document.getElementById("gate");
+      const consent = document.getElementById("consent");
+      const start = document.getElementById("start");
+      const status = document.getElementById("status");
+
+      let config = null;
+      let stream = null;
+
+      function say(message) {
+        status.textContent = message;
+      }
+
+      consent.addEventListener("change", () => {
+        start.disabled = !consent.checked;
+      });
+
+      async function loadConfig() {
+        const response = await fetch(`${API}/web/config`);
+        if (!response.ok) throw new Error("config unavailable");
+        config = await response.json();
+        document.getElementById("disclosure-text").textContent = config.disclosure;
+        document.getElementById("emergency-text").textContent =
+          `If this is a medical emergency, do not use this demo — call ` +
+          `${config.emergency_service} on ${config.emergency_number}.`;
+      }
+
+      async function mintRoomToken() {
+        const response = await fetch(`${API}/web/room-token`, { method: "POST" });
+        if (response.status === 429) throw new Error("busy");
+        if (!response.ok) throw new Error("token unavailable");
+        // A room id and a token that expires in a minute. That is the entire
+        // set of credentials this page is trusted with.
+        return response.json();
+      }
+
+      start.addEventListener("click", async () => {
+        if (!consent.checked) return;
+        start.disabled = true;
+
+        try {
+          // The gate. getUserMedia is reached only from here, only after the
+          // checkbox, and never on page load (C-27).
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          say("Microphone permission was declined. Nothing has been started.");
+          start.disabled = false;
+          return;
+        }
+
+        try {
+          const room = await mintRoomToken();
+          say(
+            `Connected to room ${room.room}. Your token is valid for ` +
+            `${room.expires_in_seconds} seconds.`
+          );
+          // The transport joins with room.token here. It is deliberately the
+          // only credential in scope, and it is worth sixty seconds of one
+          // room — never any authority over an appointment. Every booking and
+          // cancellation decision is made server-side against a reference.
+        } catch (err) {
+          // C-30: a provider or budget failure is an ordinary outcome with a
+          // defined behaviour. Release the microphone rather than holding it
+          // open on a page that is not in a call.
+          stream.getTracks().forEach((track) => track.stop());
+          stream = null;
+          say(
+            err.message === "busy"
+              ? "The demo is busy right now. Please try again later."
+              : "Couldn't reach the booking system. Nothing has been changed."
+          );
+          start.disabled = false;
+        }
+      });
+
+      loadConfig().catch(() => {
+        say("Couldn't load the demo. Please refresh.");
+        gate.setAttribute("aria-disabled", "true");
+      });
+    </script>
+  </body>
+</html>

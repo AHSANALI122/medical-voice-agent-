@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from fastapi import Header, HTTPException, Request, status
 
 from app.config import CHANNELS, get_settings
+from app.observability import stamp
 
 HEADER_CHANNEL = "x-vb-channel"
 HEADER_TIMESTAMP = "x-vb-timestamp"
@@ -201,6 +202,12 @@ async def require_signed_request(
     # caller cannot burn nonces a real client is about to use.
     if get_replay_cache().seen_before(f"{channel}:{nonce}"):
         raise _reject()
+
+    # F11 — the channel is the first thing an event row can honestly carry, and
+    # it is known only once the signature has verified. Stamping it here rather
+    # than in the middleware means an unauthenticated probe's event says nothing
+    # about which channel it claimed to be.
+    stamp(request, channel=channel)
 
     return AuthenticatedChannel(
         name=channel, client_ip=client_ip(request), call_id=call_id or None

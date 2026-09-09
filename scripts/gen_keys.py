@@ -9,6 +9,10 @@ FIELDS = [
     "VB_CHANNEL_SECRET_WEB",
     "VB_CHANNEL_SECRET_PHONE",
     "VB_CHANNEL_SECRET_TESTER",
+    # F12 — signs the browser's room token. Required in production like the rest:
+    # a generated-per-boot key would invalidate every token in flight on a
+    # restart, and on a free tier a restart is a routine event.
+    "VB_ROOM_TOKEN_KEY",
 ]
 
 for field in FIELDS:
