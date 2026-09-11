@@ -67,12 +67,12 @@ jobs:
       # fails the build rather than being silently re-resolved. CI must install
       # the same versions the developer tested against.
       #
-      # The tester group is deliberately left out. Its testable parts — signing,
-      # redaction, the audit reader, the production guard — import no Streamlit,
-      # so the suite covers them without it, and the API is proven not to need
-      # the tester in order to run.
+      # --all-groups, tester included: test_the_tester_imports_the_way_streamlit
+      # _runs_it executes the tester's prologue in a subprocess, and that
+      # prologue imports Streamlit. On a developer machine the group is usually
+      # installed already, which is exactly why the gap only showed up here.
       - name: Install the pinned dependency set
-        run: uv sync --locked --group dev
+        run: uv sync --locked --all-groups
 
       # First, and on their own, because these are the ones that gate the build.
       # If the existence oracle is back or a reference can be brute-forced, that
@@ -102,6 +102,15 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+
+      # Last, because it strips the environment down: the tester and the test
+      # tooling are removed and the API is imported on its runtime dependencies
+      # alone. Streamlit is a development tool, and a server that cannot start
+      # without one has quietly made a demo aid into a production dependency.
+      - name: The API runs without the tester or the test tooling
+        run: |
+          uv sync --locked --no-dev --no-group tester
+          uv run --no-sync python -c "import app.main; print('app imports on runtime dependencies alone')"
 
   secrets:
     name: Secret scan

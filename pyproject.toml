@@ -25,9 +25,13 @@ dev = [
     "freezegun>=1.5",
 ]
 # F9. Kept out of the default install: the tester is a development tool, and the
-# API must never need it to run. Its testable parts (signing, redaction, the
-# audit reader, the production guard) import no Streamlit, so `uv run pytest`
-# covers them without this group.
+# API must never need it to run — CI proves that by importing the app with this
+# group and the dev group both removed.
+#
+# Most of the tester's tests (signing, redaction, the audit reader, the
+# production guard) import no Streamlit, but one does: the contract test that
+# runs the tester's prologue the way `streamlit run` would. So `uv run pytest`
+# needs this group after all, and CI syncs with --all-groups.
 #
 # One coupling worth knowing about before it surprises somebody: uv resolves
 # every group into one lockfile, and streamlit caps `websockets<17` while
