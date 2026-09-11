@@ -270,6 +270,14 @@ def build_pipeline(config: PipelineConfig, *, connection=None, client=None):
 
     screen = build_turn_screen(client, on_state=on_state)
 
+    # Declaring a tool tells the model it exists; this is what makes it do
+    # something. Without it the model emits a call, Pipecat returns an empty
+    # result immediately, and no request ever reaches the API — a bot that says
+    # "let me look that up" and then has nothing to look at.
+    from agent.pipecat.functions import register_tools
+
+    register_tools(llm, client)
+
     # The published tool surface, in the shape this runtime wants. Converted
     # rather than re-declared: `agent/prompts.py` stays the single place a tool
     # is described, so the model on the phone and the model in the browser are

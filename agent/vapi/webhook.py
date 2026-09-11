@@ -41,23 +41,15 @@ from agent.client import ToolClient, ToolResponse
 VAPI_SIGNATURE_HEADER = "x-vapi-signature"
 VAPI_SECRET_HEADER = "x-vapi-secret"
 
-# What each tool is allowed to carry from the model. Anything else is dropped
-# before a request exists. Note what no list contains: an identifier of any row
-# in the database (C-04).
-ALLOWED_ARGUMENTS: dict[str, frozenset[str]] = {
-    "search_doctors": frozenset({"specialty", "doctor_query"}),
-    "resolve_date": frozenset({"phrase", "for_cancellation"}),
-    "get_available_slots": frozenset({"doctor_ordinal", "on_date"}),
-    "book_appointment": frozenset({"slot_ordinal", "patient_name"}),
-    "append_reference_digits": frozenset({"fragment"}),
-    "clear_reference_digits": frozenset(),
-    "cancel_appointment": frozenset({"patient_name", "appointment_date", "reference"}),
-}
-
-# Tools the server requires an idempotency key for, which this side mints rather
-# than accepting from the model. F15's key is what makes a retry safe, and a
-# model-chosen one is a key an attacker chose.
-NEEDS_IDEMPOTENCY_KEY = frozenset({"book_appointment"})
+# Both of these now live in `agent/toolcalls.py`, shared with the web channel.
+# F13 asks for parity — the same conversation, the same database state on web
+# and phone — and two copies of an argument allowlist is the most reliable way
+# to lose that quietly. Re-exported here because this module's name for them is
+# part of its published surface.
+from agent.toolcalls import (  # noqa: E402
+    ALLOWED_ARGUMENTS,
+    NEEDS_IDEMPOTENCY_KEY,
+)
 
 
 class UnauthenticatedWebhook(Exception):
