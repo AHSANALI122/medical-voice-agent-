@@ -25,6 +25,28 @@ for name in (
     )
 os.environ["VB_DATABASE_PATH"] = ":memory:"
 
+# The F8 budgets, pinned to the values `app/config.py` ships.
+#
+# Assigned, not `setdefault`: pydantic-settings ranks the real environment above
+# `.env`, and `.env` is gitignored and local. Without these the suite silently
+# tests whatever budget a developer happened to raise to get the tester working
+# — `test_a_throttled_call_is_recorded_as_throttled` hardcodes 3, and the F8
+# tests that do read the limit from settings still need it small enough to stay
+# inside the seeded availability. A security suite that means something
+# different on every machine is worse than one that is merely strict, so the
+# numbers under test live here, next to the assertions that depend on them.
+#
+# Raising a budget in your own `.env` is expected and supported; it is how the
+# text-mode loop in spec §10 stays usable on one IP. It must not reach here.
+os.environ["ABUSE_WINDOW_HOURS"] = "24"
+os.environ["MAX_SESSIONS_PER_IP_PER_DAY"] = "3"
+os.environ["MAX_SESSIONS_PER_CALL_ID_PER_DAY"] = "3"
+os.environ["MAX_BOOKINGS_PER_NAME_PER_DAY"] = "3"
+os.environ["MAX_BOOKINGS_PER_DAY_GLOBAL"] = "200"
+os.environ["MAX_REFERENCE_ATTEMPTS"] = "5"
+os.environ["REFERENCE_LOCK_MINUTES"] = "60"
+os.environ["MAX_ROOM_TOKENS_PER_IP_PER_DAY"] = "6"
+
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy.orm import Session as OrmSession  # noqa: E402
 

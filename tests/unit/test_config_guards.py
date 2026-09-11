@@ -76,3 +76,36 @@ def test_each_channel_has_its_own_secret():
     }
     assert len(secrets_seen) == 3
     assert settings.channel_secret("admin") is None
+
+
+def test_the_suite_runs_on_the_budgets_the_code_ships():
+    """`tests/conftest.py` pins the F8 budgets into the environment so a local,
+    gitignored `.env` cannot change what the adversarial suite tests.
+
+    That pin is only worth having if it tracks the real defaults. Without this,
+    lowering `max_sessions_per_ip_per_day` in `app/config.py` would leave the
+    suite quietly asserting the old, looser number — and the comment in conftest
+    claiming these are the shipped defaults would simply be wrong.
+    """
+    import os
+
+    # Read off the model, not off a `Settings()` instance. An instance resolves
+    # through the environment — which is exactly where conftest wrote these — so
+    # comparing against one compares the pin with itself and passes no matter
+    # what `app/config.py` says. `_env_file=None` does not help: it silences the
+    # file, not `os.environ`.
+    pinned = (
+        "max_sessions_per_ip_per_day",
+        "max_sessions_per_call_id_per_day",
+        "max_bookings_per_name_per_day",
+        "max_bookings_per_day_global",
+        "max_reference_attempts",
+        "reference_lock_minutes",
+        "abuse_window_hours",
+    )
+    for field in pinned:
+        shipped = Settings.model_fields[field].default
+        assert os.environ[field.upper()] == str(shipped), (
+            f"tests/conftest.py pins {field.upper()}={os.environ[field.upper()]}, "
+            f"but app/config.py now ships {shipped}"
+        )

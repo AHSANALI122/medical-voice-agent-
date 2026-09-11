@@ -39,7 +39,17 @@ import streamlit as st  # noqa: E402
 
 from tester.audit import AuditUnavailable, read_events  # noqa: E402
 from tester.client import MASK, DEFAULT_BASE_URL, ToolClient, redact  # noqa: E402
+from tester.env import load_local_env  # noqa: E402
 from tester.guard import assert_not_production  # noqa: E402
+
+# `streamlit run` puts nothing from `.env` into the environment, and the tester
+# cannot import `app.config` to get it (C-19). Read it here, at the process
+# entry point.
+#
+# This has to happen *above* the guard, not merely above the first tool call:
+# `current_env` defaults to `development` when `ENV` is unset, so a tester that
+# has not read `.env` yet cannot see `ENV=production` sitting in it.
+load_local_env()
 
 # First line of the app, before anything renders.
 ENV = assert_not_production()
