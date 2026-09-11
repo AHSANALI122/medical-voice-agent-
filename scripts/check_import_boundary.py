@@ -1,8 +1,16 @@
 """C-19, C-13 — the trust boundary is enforced by CI, not by discipline.
 
-Nothing under agent/ or tester/ may import app.services, app.db, or app.models.
-Both packages talk to the API over HTTP with the same credentials as any external
-caller. A boundary you can bypass with an import is not a boundary.
+Nothing under agent/ or tester/ may import anything from `app`. Both packages
+talk to the API over HTTP with the same credentials as any external caller. A
+boundary you can bypass with an import is not a boundary.
+
+The forbidden prefix is the whole package, not a list of the interesting
+subpackages. An earlier version named `app.services`, `app.db`, `app.models`,
+`app.security` and `app.tools` — which left `app.web`, `app.config` and
+`app.schemas` importable, so `from app.web import tokens` passed a check whose
+stated rule it broke. A guard with a list of what is forbidden is a guard that
+is wrong every time somebody adds a subpackage; a guard with a list of what is
+allowed is only wrong when the rule itself changes.
 
 tester/ is checked for the same reason agent/ is, and it is the whole answer to
 C-13: the Streamlit tester is not a backdoor because it *cannot* reach the
@@ -18,7 +26,7 @@ import sys
 from pathlib import Path
 
 UNTRUSTED_ROOTS = (Path("agent"), Path("tester"))
-FORBIDDEN_PREFIXES = ("app.services", "app.db", "app.models", "app.security", "app.tools")
+FORBIDDEN_PREFIXES = ("app",)
 
 
 def offending_imports(path: Path) -> list[tuple[int, str]]:

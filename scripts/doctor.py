@@ -147,8 +147,9 @@ def check_app() -> bool:
 def check_running() -> None:
     print("\n== processes ==")
     for port, what, how in (
-        (8000, "tool API", "uv run uvicorn app.main:app --port 8000"),
-        (8001, "Vapi webhook", "uv run uvicorn agent.vapi.server:create_app --factory --port 8001"),
+        (8000, "tool API", "uv run python scripts/serve.py api"),
+        (8001, "Vapi webhook", "uv run python scripts/serve.py phone"),
+        (8002, "web signalling", "uv run python scripts/serve.py web"),
         (8501, "Streamlit tester", "uv run streamlit run tester/app.py"),
     ):
         if _port_open(port):
@@ -176,7 +177,7 @@ def summary(env_ok: bool, keys_ok: bool, app_ok: bool) -> int:
         print("  - uv run pytest                  the whole suite")
         print("  - uv run python -m evals         25 scripted conversations")
         print("  - uv run streamlit run tester/app.py   the text tester")
-        print("    (start the API first: uv run uvicorn app.main:app --port 8000)")
+        print("    (start the API first: uv run python scripts/serve.py api)")
         print("\n  None of the above needs a single provider key.")
         if not os.environ.get("GROQ_API_KEY"):
             print("\n  For live audio you still owe: a Groq key. See SETUP.md.")

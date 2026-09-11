@@ -73,6 +73,11 @@
       </section>
 
       <p id="status" role="status" aria-live="polite"></p>
+
+      <!-- The agent's voice. `autoplay` alone is not enough after a gesture-gated
+           permission prompt on some browsers, so the track handler calls play()
+           as well. Muted is deliberately absent: this element exists to be heard. -->
+      <audio id="agent" autoplay playsinline></audio>
     </main>
 
     <script>
@@ -84,9 +89,11 @@
       const consent = document.getElementById("consent");
       const start = document.getElementById("start");
       const status = document.getElementById("status");
+      const audio = document.getElementById("agent");
 
       let config = null;
       let stream = null;
+      let peer = null;
 
       function say(message) {
         status.textContent = message;
@@ -115,6 +122,94 @@
         return response.json();
       }
 
+      // Plain WebRTC, hand-written, on purpose. A transport library would have
+      // to come from a CDN, and this page is served under a policy that allows
+      // scripts and connections from its own origin only — which is the run-time
+      // half of the rule `check_client_bundle.py` greps for at build time. The
+      // signalling here is one POST: an offer goes up, an answer comes back.
+      //
+      // STUN is listed because a server behind NAT has to discover its own
+      // address. It carries no audio and no credential; the SDP it helps produce
+      // travels over this page's own origin, never through it.
+      const ICE = [{ urls: "stun:stun.l.google.com:19302" }];
+
+      async function connect(room) {
+        peer = new RTCPeerConnection({ iceServers: ICE });
+
+        // The caller's microphone out, the agent's voice back. One audio track
+        // each way and no data channel: this page sends no application message
+        // the server would have to trust.
+        stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+        peer.addTransceiver("audio", { direction: "recvonly" });
+
+        peer.ontrack = (event) => {
+          audio.srcObject = event.streams[0];
+          audio.play().catch(() => {});
+        };
+
+        peer.onconnectionstatechange = () => {
+          if (peer.connectionState === "failed") {
+            hangUp("The call dropped. Nothing has been changed.");
+          } else if (peer.connectionState === "closed") {
+            hangUp("Call ended.");
+          }
+        };
+
+        await peer.setLocalDescription(await peer.createOffer());
+        // Wait for ICE gathering, so the offer goes up complete rather than
+        // trickling candidates over a second channel this page does not have.
+        await gathered(peer);
+
+        const response = await fetch(`${API}/api/offer`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            room: room.room,
+            token: room.token,
+            sdp: peer.localDescription.sdp,
+            type: peer.localDescription.type,
+          }),
+        });
+        if (!response.ok) throw new Error("offer refused");
+
+        await peer.setRemoteDescription(await response.json());
+      }
+
+      function gathered(pc) {
+        if (pc.iceGatheringState === "complete") return Promise.resolve();
+        return new Promise((resolve) => {
+          // Bounded. A candidate that has not arrived in two seconds is one the
+          // call can start without, and a page that waits forever for it is a
+          // page that looks broken.
+          const done = () => {
+            clearTimeout(timer);
+            pc.removeEventListener("icegatheringstatechange", check);
+            resolve();
+          };
+          const check = () => {
+            if (pc.iceGatheringState === "complete") done();
+          };
+          const timer = setTimeout(done, 2000);
+          pc.addEventListener("icegatheringstatechange", check);
+        });
+      }
+
+      function hangUp(message) {
+        // The microphone is released here and nowhere else, so there is one
+        // place to check that a page which is not in a call is not listening.
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          stream = null;
+        }
+        if (peer) {
+          peer.close();
+          peer = null;
+        }
+        audio.srcObject = null;
+        say(message);
+        start.disabled = !consent.checked;
+      }
+
       start.addEventListener("click", async () => {
         if (!consent.checked) return;
         start.disabled = true;
@@ -131,26 +226,22 @@
 
         try {
           const room = await mintRoomToken();
-          say(
-            `Connected to room ${room.room}. Your token is valid for ` +
-            `${room.expires_in_seconds} seconds.`
-          );
-          // The transport joins with room.token here. It is deliberately the
-          // only credential in scope, and it is worth sixty seconds of one
-          // room — never any authority over an appointment. Every booking and
+          say("Connecting…");
+          // The transport joins with room.token. It is deliberately the only
+          // credential in scope, and it is worth sixty seconds of one room —
+          // never any authority over an appointment. Every booking and
           // cancellation decision is made server-side against a reference.
+          await connect(room);
+          say("Connected. Go ahead and speak.");
         } catch (err) {
-          // C-30: a provider or budget failure is an ordinary outcome with a
-          // defined behaviour. Release the microphone rather than holding it
-          // open on a page that is not in a call.
-          stream.getTracks().forEach((track) => track.stop());
-          stream = null;
-          say(
+          // C-30: a provider, budget or transport failure is an ordinary outcome
+          // with a defined behaviour. Release the microphone rather than holding
+          // it open on a page that is not in a call.
+          hangUp(
             err.message === "busy"
               ? "The demo is busy right now. Please try again later."
               : "Couldn't reach the booking system. Nothing has been changed."
           );
-          start.disabled = false;
         }
       });
 

@@ -47,6 +47,9 @@ jobs:
       - name: Client bundle — nothing shipped to a browser holds a key (C-16)
         run: python scripts/check_client_bundle.py
 
+      - name: Proxy headers — the caller never picks their own rate-limit key (C-34)
+        run: python scripts/check_proxy_headers.py
+
       - name: Only .env.example is tracked
         shell: bash
         run: |
@@ -78,8 +81,16 @@ jobs:
       # _runs_it executes the tester's prologue in a subprocess, and that
       # prologue imports Streamlit. On a developer machine the group is usually
       # installed already, which is exactly why the gap only showed up here.
+      #
+      # ...except `voice`, and that exclusion is the F12 design stated as a
+      # command. Nothing in the suite needs Pipecat: the turn policy, the VAD
+      # profile, the screen's verdict and the trust boundary are pure functions,
+      # and `agent/pipecat/` imports the audio stack lazily so they stay
+      # assertable without it. Installing it here would buy nothing, add a
+      # native build to every run, and quietly weaken the one test that proves a
+      # missing audio stack fails loudly rather than silently.
       - name: Install the pinned dependency set
-        run: uv sync --locked --all-groups
+        run: uv sync --locked --all-groups --no-group voice
 
       # First, and on their own, because these are the ones that gate the build.
       # If the existence oracle is back or a reference can be brute-forced, that

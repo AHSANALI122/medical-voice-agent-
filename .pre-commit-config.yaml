@@ -78,6 +78,15 @@ repos:
         pass_filenames: false
         files: '^agent/pipecat/web/|^scripts/check_client_bundle\.py$'
 
+      # Anything that can start a server, or tell somebody how to: a README, a
+      # runbook, a workflow, a Procfile, a Dockerfile, a script.
+      - id: proxy-headers
+        name: the caller never picks their own rate-limit key (C-34)
+        language: system
+        entry: python scripts/check_proxy_headers.py
+        pass_filenames: false
+        files: '\.(md|ya?ml|toml|sh|ps1|py|cfg|ini|json)$|^(Procfile|Dockerfile|Makefile)$'
+
       # CLAUDE.md: run the adversarial suite before any commit touching
       # app/security/ or app/tools/. That is this hook. It takes about half a
       # minute, which is why it is scoped to exactly those two directories

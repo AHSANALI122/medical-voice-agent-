@@ -73,7 +73,7 @@ anywhere in this repository.
 ```bash
 uv sync
 uv run python scripts/gen_keys.py     # prints keys for a local .env — do not commit
-uv run uvicorn app.main:app --reload
+uv run python scripts/serve.py api --reload
 ```
 
 Without a `.env`, a development boot generates ephemeral keys and says so in the

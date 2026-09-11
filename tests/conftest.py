@@ -47,6 +47,19 @@ os.environ["MAX_REFERENCE_ATTEMPTS"] = "5"
 os.environ["REFERENCE_LOCK_MINUTES"] = "60"
 os.environ["MAX_ROOM_TOKENS_PER_IP_PER_DAY"] = "6"
 
+# Pinned for the same reason the budgets above are, and it arrived by the same
+# route. `agent.pipecat.server.create_app` and `agent.vapi.server.create_app` are
+# process entry points, so they load `.env` into `os.environ` — correct in a
+# deployment, and in a test session it means every `get_settings()` after the
+# first `create_app()` sees whatever is in a developer's local file. A `.env`
+# with `VB_TRUSTED_PROXY_HOPS=1` in it (which a machine running the web channel
+# needs) silently turned the C-34 tests into tests of the proxied path.
+#
+# Zero is the value the tests assert against: no proxy in front, so the peer
+# address is the only thing believed. The proxied path is asserted explicitly,
+# by the test that sets it.
+os.environ["VB_TRUSTED_PROXY_HOPS"] = "0"
+
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy.orm import Session as OrmSession  # noqa: E402
 

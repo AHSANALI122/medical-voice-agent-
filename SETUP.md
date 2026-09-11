@@ -42,7 +42,7 @@ uv run pytest                              # 586 tests
 uv run python -m evals                     # 25 scripted conversations
 uv run python -m evals --transcripts       # the same run, as a report
 
-uv run uvicorn app.main:app --port 8000    # terminal 1
+uv run python scripts/serve.py api         # terminal 1
 uv run streamlit run tester/app.py         # terminal 2 -> localhost:8501
 ```
 
@@ -78,8 +78,8 @@ Two processes, not one, and deliberately so — if the webhook lived on the API,
 "the boundary is a network hop" would be a comment rather than a fact.
 
 ```bash
-uv run uvicorn app.main:app --port 8000                                  # terminal 1
-uv run uvicorn agent.vapi.server:create_app --factory --port 8001        # terminal 2
+uv run python scripts/serve.py api      # terminal 1 -> :8000
+uv run python scripts/serve.py phone    # terminal 2 -> :8001
 ```
 
 Check both: `curl localhost:8000/healthz` and `curl localhost:8001/healthz`.
@@ -177,15 +177,104 @@ Groq serves both the LLM and Whisper, so **one key** runs the web demo.
 Take Deepgram too if you intend to do what §1.2 asks and benchmark both on your
 own accent. One is enough to run.
 
-Put them in `.env` by hand (`init_env.py` leaves provider keys alone — it cannot
-invent them), then install the audio stack in whichever environment serves calls.
-`agent/pipecat/pipeline.py` raises `PipecatUnavailable` with the missing names
-until it has what it needs.
+Put them in `.env` by hand — `init_env.py` leaves provider keys alone, because it
+cannot invent them — and install the audio stack:
+
+```bash
+uv sync --group voice --group tester
+```
+
+Both groups, and the second one is not optional politeness: `uv sync --group
+voice` on its own syncs the environment to *exactly* that set and uninstalls
+Streamlit, so the text tester stops working and one contract test starts failing
+with `No module named 'streamlit'`. `--all-groups` does the same job.
+
+The first call downloads a 120MB Piper voice model to `~/.cache/pipecat/piper/`.
+Let it finish: the existence check is on the `.onnx` file alone, so a download
+interrupted after that file lands leaves a cache that is never repaired
+automatically. If Piper starts raising `FileNotFoundError` on a `.onnx.json`,
+delete that directory and let it download again.
+
+Until the voice group is installed, a call answers 503 and the log says why. The rest
+of the system is unaffected: the group is out of the default install on purpose,
+and CI proves the API never needs it.
+
+`missing_provider_keys()` names only what your configuration actually uses. On
+the default build that is one variable, `GROQ_API_KEY`; choosing Deepgram for STT
+adds `DEEPGRAM_API_KEY` and nothing else.
 
 Nothing here reaches the browser. `scripts/check_client_bundle.py` fails the
 build if a provider key — or even the *name* of one — appears in anything served
 to a page. The browser gets a room id and a 60-second token, and that is all it
 is trusted with.
+
+### The third process
+
+```bash
+uv run python scripts/serve.py api      # terminal 1 -> :8000
+uv run python scripts/serve.py web      # terminal 2 -> :8002
+```
+
+The page is on **:8002**, not :8000. A page and its API have to share an origin,
+so the signalling server fronts the two application endpoints a browser needs —
+`GET /web/config` and `POST /web/room-token`, and nothing else. Everything under
+`/tools/*` answers 404 there, deliberately: this process holds the web channel
+secret, and a proxy that signs on a stranger's behalf is the stranger holding
+that secret.
+
+Until the audio path is assembled, `POST /api/offer` answers 503 with a good
+token and 403 with a bad one. That difference is the useful one: 403 means the
+token was refused, 503 means it was accepted and there is no pipeline yet.
+
+Set this in `.env`, because there is now a proxy in front of the API:
+
+```
+VB_TRUSTED_PROXY_HOPS=1
+```
+
+Without it the application charges the room-token budget to the signalling
+server's address rather than the browser's, and every visitor in the world
+shares one bucket of six mints a day. The process warns at boot if it is unset.
+
+### What one visitor may cost you
+
+`/api/offer` is unauthenticated — the browser holds no channel secret and must
+not be given one — so the signalling process budgets it directly. Three limits,
+all optional to set and all with demo-sized defaults:
+
+| Variable | Default | What it caps |
+|---|---|---|
+| `VB_MAX_OFFERS_PER_IP` | 12 | Offers from one address per window. Charged on the attempt, so a forged token costs the sender too |
+| `VB_OFFER_WINDOW_SECONDS` | 3600 | The window above |
+| `VB_MAX_CONCURRENT_CALLS` | 3 | Live calls at once. Every one is a loaded model and Groq inference per turn |
+
+Two things worth knowing about how they behave. The per-address budget is
+checked **before** the room token is verified — so a refused offer costs the
+application nothing, and a 429 never reveals that the token was the good part.
+And a second offer naming a room that is already live **replaces** that call
+rather than being refused, because the usual reason for one is a browser
+reconnecting, not an attack. One token therefore holds one call open, not many:
+a room token stays valid for its full minute and can be presented repeatedly.
+
+---
+
+## Why `serve.py` and not `uvicorn` directly
+
+`uvicorn` enables `--proxy-headers` by default, and with it on, uvicorn
+overwrites `request.client.host` from the caller's own `X-Forwarded-For` before
+the application sees the request. Every budget here keys on the source address,
+so that default lets a caller pick their own rate-limit bucket by adding a
+header — measured, not theorised: eight requests with eight forged headers
+produced eight separate buckets.
+
+`client_ip` in `app/security/request_auth.py` already reads that header
+carefully, only as far back as `VB_TRUSTED_PROXY_HOPS` says there are proxies.
+Uvicorn's version reads the leftmost entry, which is the one the client writes.
+
+So `scripts/serve.py` passes `proxy_headers=False` and is the way to start any
+of the three processes. `scripts/check_proxy_headers.py` fails the build if
+anything in the repository starts a server any other way. A flag you have to
+remember is a flag that is set on the machine where you tested it.
 
 ---
 
@@ -233,3 +322,7 @@ uv run python scripts/doctor.py
 | A key "is set" but nothing works | UTF-16 damage from `>> .env`; re-run `init_env.py` |
 | `PipecatUnavailable` | Expected without the audio stack. Text mode is unaffected |
 | Booking says the slot was taken | The demo database resets on every restart; re-seed happens at boot |
+| `No module named 'streamlit'` after installing voice | `uv sync --group voice` dropped the tester group; re-sync with both |
+| Piper raises `FileNotFoundError` on a `.onnx.json` | An interrupted first download. Delete `~/.cache/pipecat/piper/` |
+| The page says "Couldn't reach the booking system" | The API is not running, or the page was opened on :8000 instead of :8002 |
+| One visitor's reconnects lock out the next | `VB_TRUSTED_PROXY_HOPS=1` is missing; the whole world is sharing one budget |

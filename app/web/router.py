@@ -19,13 +19,18 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import Field
 from sqlalchemy.orm import Session as OrmSession
 
 from app.config import get_settings
 from app.db.base import db_session
 from app.schemas.types import StrictModel
 from app.security import rate_limit
-from app.security.request_auth import client_ip
+from app.security.request_auth import (
+    AuthenticatedChannel,
+    client_ip,
+    require_signed_request,
+)
 from app.web import tokens
 
 log = logging.getLogger("voicebook.web")
@@ -100,4 +105,65 @@ def web_config() -> WebConfigResult:
         emergency_number=settings.vb_emergency_number,
         default_silence_ms=settings.vad_default_silence_ms,
         digit_silence_ms=settings.vad_digit_silence_ms,
+    )
+
+
+# One body for every refusal, the same reasoning as the uniform cancellation
+# failure (6.2) applied to a much smaller thing. Expired, tampered, wrong room
+# and wrong channel are indistinguishable from outside.
+ROOM_TOKEN_REFUSED = "room token refused"
+
+
+class RoomTokenVerifyRequest(StrictModel):
+    """What the signalling server presents on behalf of a browser."""
+
+    token: str = Field(min_length=1, max_length=512)
+    room: str = Field(min_length=1, max_length=128)
+
+
+class RoomTokenVerifyResult(StrictModel):
+    room: str
+    expires_in_seconds: int
+
+
+@router.post("/room-token/verify", response_model=RoomTokenVerifyResult)
+def verify_room_token(
+    payload: RoomTokenVerifyRequest,
+    channel: AuthenticatedChannel = Depends(require_signed_request),
+) -> RoomTokenVerifyResult:
+    """Answer one question for the web signalling server: may this token open
+    this room?
+
+    It exists because the signalling server **cannot** answer it itself. The
+    verifier and `VB_ROOM_TOKEN_KEY` live here, in the trusted zone, and
+    `agent/` may hold an HTTP client and nothing else from this codebase (C-19).
+    A signalling process that verified locally would need the room token key in
+    the one process that accepts WebRTC offers from strangers — and the moment
+    it holds that key it can mint tokens as well as check them. Over HTTP it can
+    only ask.
+
+    This is authorization, not validation, so it is 403 and not 422 (C-36). A
+    well-formed token from a stranger is still a token this server did not mint.
+
+    The `web` channel restriction is the point of scoping a secret per channel.
+    Phone and tester have no rooms; if either of their secrets leaks, it must not
+    become a key to a browser's media room.
+    """
+    if channel.name != "web":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=ROOM_TOKEN_REFUSED
+        )
+
+    try:
+        verified = tokens.verify(payload.token, room=payload.room)
+    except tokens.InvalidRoomToken:
+        # Nothing about the token is logged. It is a credential, short-lived or
+        # not, and a rejected one is still one somebody tried.
+        log.info("room_token_refused room=%s", payload.room[:32])
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=ROOM_TOKEN_REFUSED
+        ) from None
+
+    return RoomTokenVerifyResult(
+        room=verified.room, expires_in_seconds=verified.ttl_seconds
     )

@@ -42,6 +42,27 @@ dev = [
 tester = [
     "streamlit>=1.40",
 ]
+# F12. The audio stack, kept out of the default install for the same reason the
+# tester is: the API must never need it to run, and CI proves that by importing
+# the app without this group. Every module under `agent/pipecat/` imports Pipecat
+# lazily and raises `PipecatUnavailable` rather than failing to import, so the
+# turn policy, the VAD profile, the screen's behaviour and the trust boundary are
+# all asserted in CI on a machine with none of this installed.
+#
+# The extras are the four the spec chose, and the reason there are only four is
+# that three of them need no account at all: Silero runs locally, Piper runs
+# locally, and SmallWebRTC needs no media server. Groq is the one credential, and
+# it serves the LLM and Whisper both.
+#
+# Watch the websockets pin here. The comment above is not hypothetical any more:
+# streamlit caps `websockets<17` and uvicorn[standard] asks for `>=13`, which
+# already pulled the lockfile down to 16.1.1. If `uv sync --group voice` starts
+# reporting a conflict, this is the first place to look, and the answer is to
+# install this group in the environment that serves calls rather than alongside
+# the tester.
+voice = [
+    "pipecat-ai[groq,piper,silero,webrtc]>=1.9",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
