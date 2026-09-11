@@ -162,13 +162,113 @@ def check_optional_imports() -> None:
     print("\n== optional packages ==")
     for module, what, note in (
         ("streamlit", "Streamlit tester", "uv sync --group tester"),
-        ("pipecat", "live web audio", "not needed until you want a microphone"),
+        ("pipecat", "live web audio", "uv sync --group voice --group tester"),
     ):
         try:
             __import__(module)
             _line(OK, what)
         except ImportError:
             _line(WARN, f"{what} unavailable", note)
+
+
+# Distributions that are unremarkable until they are damaged, at which point the
+# symptom lands somewhere else entirely. `charset-normalizer` taught this check
+# its lesson: a half-written install left files missing, `import
+# charset_normalizer` still succeeded, `requests` warned that it could not find a
+# character-detection dependency, and the thing that appeared broken was the
+# Streamlit tester — three layers from the damage.
+#
+# Named as distributions, not modules, because that is what gets installed and
+# what `--reinstall-package` takes.
+INTEGRITY_CHECKS: tuple[tuple[str, str], ...] = (
+    ("charset-normalizer", "requests, and through it Streamlit"),
+    ("narwhals", "Streamlit's dataframes"),
+    ("streamlit", "the text tester"),
+    ("pipecat-ai", "live web audio"),
+)
+
+# A whole install cannot be verified on every run — some of these ship thousands
+# of files. A sample is enough: a half-written install loses a contiguous run of
+# them, not one unlucky file.
+INTEGRITY_SAMPLE = 40
+
+
+def missing_files(dist) -> list[str]:
+    """Files the distribution says it installed that are not on disk.
+
+    This is the question that actually matters, and it is not "does it import".
+    An empty package directory still imports — Python treats it as a namespace
+    package — and a package that lost half its modules imports right up until
+    something touches the missing half.
+
+    RECORD is read directly rather than through `dist.files`, and that is not
+    fussiness. On Python 3.12 `dist.files` passes its result through
+    `skip_missing_files`, which silently drops exactly the entries this function
+    exists to find: ask the convenient API which files are missing and it
+    answers "none", every time, on a wrecked install.
+    """
+    from pathlib import Path
+
+    try:
+        record = dist.read_text("RECORD")
+    except Exception:  # noqa: BLE001 - an unreadable RECORD is "cannot tell"
+        record = None
+    if not record:
+        # Some installs carry no RECORD. "I cannot tell" must not print as
+        # "broken"; a health check that cries wolf is one people stop reading.
+        return []
+
+    recorded = [
+        line.split(",", 1)[0]
+        for line in record.splitlines()
+        if line.strip() and not line.startswith(",")
+    ]
+    if not recorded:
+        return []
+
+    step = max(1, len(recorded) // INTEGRITY_SAMPLE)
+    gone: list[str] = []
+    for entry in recorded[::step]:
+        try:
+            present = Path(dist.locate_file(entry)).exists()
+        except OSError:
+            present = False
+        if not present:
+            gone.append(entry)
+    return gone
+
+
+def check_package_integrity() -> None:
+    """Installed is not the same as importable, in either direction."""
+    import importlib.metadata as metadata
+
+    print("\n== package integrity ==")
+    damaged: list[str] = []
+
+    for name, why in INTEGRITY_CHECKS:
+        try:
+            dist = metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            continue  # absent is a different problem, and reported above
+
+        gone = missing_files(dist)
+        if gone:
+            damaged.append(name)
+            _line(
+                MISSING,
+                f"{name} is installed but incomplete",
+                f"breaks {why}; e.g. {gone[0]} is missing",
+            )
+        else:
+            _line(OK, name)
+
+    if damaged:
+        print(
+            "\n  An interrupted or concurrent `uv sync` leaves packages like this.\n"
+            f"  Repair: uv sync --reinstall-package {' '.join(damaged)}\n"
+            "  A plain `uv sync` will not fix it — as far as it is concerned,\n"
+            "  those packages are already installed."
+        )
 
 
 def summary(env_ok: bool, keys_ok: bool, app_ok: bool) -> int:
@@ -211,6 +311,7 @@ def main() -> int:
     check_provider_keys()
     app_ok = check_app()
     check_optional_imports()
+    check_package_integrity()
     check_running()
     return summary(env_ok, keys_ok, app_ok)
 

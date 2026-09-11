@@ -92,9 +92,16 @@ repos:
       # minute, which is why it is scoped to exactly those two directories
       # rather than always_run — a hook people are tempted to skip protects
       # nothing.
+      # `app/web/` is on this list because `room-token/verify` is an
+      # authorization decision: it answers 403, it checks the channel, and every
+      # refusal has to say the same thing. The rule in CLAUDE.md is about code
+      # that decides who may do what, and the pattern has to match the rule
+      # rather than the two directories that happened to hold such code first.
+      # `agent/pipecat/budget.py` is here for the same reason — it is the only
+      # limit standing in front of an unauthenticated endpoint.
       - id: adversarial-suite
-        name: adversarial suite (app/security and app/tools)
+        name: adversarial suite (authorization, limits, tool surface)
         language: system
         entry: uv run pytest tests/adversarial -q
         pass_filenames: false
-        files: '^app/(security|tools)/'
+        files: '^app/(security|tools|web)/|^agent/pipecat/budget\.py$'

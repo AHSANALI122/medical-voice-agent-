@@ -324,5 +324,7 @@ uv run python scripts/doctor.py
 | Booking says the slot was taken | The demo database resets on every restart; re-seed happens at boot |
 | `No module named 'streamlit'` after installing voice | `uv sync --group voice` dropped the tester group; re-sync with both |
 | Piper raises `FileNotFoundError` on a `.onnx.json` | An interrupted first download. Delete `~/.cache/pipecat/piper/` |
+| Streamlit misbehaves after a sync, or `requests` warns about character detection | A half-written install. `doctor.py` names the package; repair with `uv sync --reinstall-package <name>` |
+| Two `uv sync` runs at once | The second fails on a file lock and leaves the first one's package incomplete. Run one at a time |
 | The page says "Couldn't reach the booking system" | The API is not running, or the page was opened on :8000 instead of :8002 |
 | One visitor's reconnects lock out the next | `VB_TRUSTED_PROXY_HOPS=1` is missing; the whole world is sharing one budget |
