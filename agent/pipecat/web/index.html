@@ -168,6 +168,11 @@
             token: room.token,
             sdp: peer.localDescription.sdp,
             type: peer.localDescription.type,
+            // C-27. Carried explicitly rather than inferred from the fact that
+            // a request arrived: the server opens the caller's session with
+            // this value, and "they got this far, so they must have agreed" is
+            // exactly the assumption the consent gate exists to replace.
+            consent: consent.checked,
           }),
         });
         if (!response.ok) throw new Error("offer refused");

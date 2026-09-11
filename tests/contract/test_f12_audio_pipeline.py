@@ -263,3 +263,67 @@ def test_the_page_opens_no_data_channel():
 def test_ice_gathering_cannot_hang_the_page():
     source = PAGE.read_text(encoding="utf-8")
     assert "setTimeout(done" in source
+
+
+# --------------------------------------------------------------------------
+# A call without a session says the same wrong thing forever (F10, C-27)
+# --------------------------------------------------------------------------
+
+
+def test_screening_without_a_session_is_refused_by_the_server(api, client):
+    """The shape of the bug this section exists for.
+
+    Every tool call carries a session id, `screen_turn` included. A pipeline
+    that started without opening one screened each turn with `session_id=None`,
+    which is a validation failure, not an authorization one — so the caller
+    heard the uniform refusal whatever they said, and the logs showed a 422 that
+    looked like a malformed utterance rather than a missing session.
+    """
+    response = api.post("/tools/screen_turn", {"utterance": "hello"})
+    assert response.status_code == 422
+
+
+def test_an_unscreened_turn_becomes_the_uniform_refusal(monkeypatch):
+    """422 is `not ok`, and `screen_turn` maps every not-ok answer to the same
+    sentence. Correct in itself — the agent may not elaborate on a refusal — and
+    the reason a missing session is invisible from the outside.
+    """
+    from agent.client import ToolResponse
+    from agent.turn import UNIFORM_REFUSAL_UTTERANCE, Disposition, screen_turn
+
+    class _Unsessioned:
+        def screen(self, _utterance):
+            return ToolResponse(
+                tool="screen_turn",
+                status_code=422,
+                body={"detail": "session_id"},
+                latency_ms=1.0,
+            )
+
+    plan = screen_turn(_Unsessioned(), "I'd like to book an appointment")
+    assert plan.disposition is Disposition.SPEAK_AND_STOP
+    assert plan.utterance == UNIFORM_REFUSAL_UTTERANCE
+
+
+def test_a_session_opened_with_consent_makes_screening_work(api, client):
+    """The fix, end to end through the real endpoints: open a session, then
+    screen a turn with it.
+    """
+    opened = api.post("/tools/create_session", {"consent_given": True})
+    assert opened.status_code == 200
+    session_id = opened.json()["session_id"]
+
+    screened = api.post(
+        "/tools/screen_turn", {"session_id": session_id, "utterance": "hello"}
+    )
+    assert screened.status_code == 200
+
+
+def test_the_page_carries_consent_in_the_offer():
+    """C-27 says the browser establishes consent before the microphone is live.
+    It has to travel with the offer, because the server opens the session with
+    it — inferring it from "a request arrived" is the assumption the gate exists
+    to replace.
+    """
+    source = PAGE.read_text(encoding="utf-8")
+    assert "consent: consent.checked" in source

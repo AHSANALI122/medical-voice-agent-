@@ -155,7 +155,7 @@ PIPELINE_ORDER: tuple[str, ...] = (
 )
 
 
-def build_pipeline(config: PipelineConfig, *, connection=None):
+def build_pipeline(config: PipelineConfig, *, connection=None, client=None):
     """Construct the live Pipecat pipeline.
 
     Everything above the transport — the turn policy, the VAD profile, the trust
@@ -253,7 +253,10 @@ def build_pipeline(config: PipelineConfig, *, connection=None):
     # always-on portfolio demo matters more than the voice quality does.
     tts = PiperTTSService(settings=PiperTTSService.Settings(voice=config.tts_voice))
 
-    client = tool_client_for(config)
+    # Passed in by `start_call`, which opens the session before a peer
+    # connection exists, so a call that cannot get one never starts. Built
+    # here only for the tests that construct a pipeline directly.
+    client = client or tool_client_for(config)
 
     def on_state(state: str) -> None:
         """Follow the server's state with the silence threshold.
@@ -320,6 +323,7 @@ async def start_call(
     *,
     sdp: str,
     sdp_type: str,
+    consent_given: bool,
     on_closed=None,
 ):  # pragma: no cover - needs the audio stack
     """Answer one browser's offer and put a bot on the other end of it.
@@ -355,6 +359,24 @@ async def start_call(
 
     import asyncio
 
+    # The session is opened here, before a peer connection exists, and that
+    # placement is the fix for a real failure rather than tidiness. Every tool
+    # call carries a session id, `screen_turn` included — so a pipeline that
+    # started without one screened every turn with `session_id=None`, collected
+    # a 422, and said "I wasn't able to match that" to whatever the caller
+    # said, forever. Opening it first means a call that cannot get a session
+    # never becomes a call at all.
+    #
+    # Consent is passed through, not assumed (C-27). The browser is the only
+    # place that can know, because it is the only place where a microphone was
+    # asked for.
+    client = tool_client_for(config)
+    opened = await asyncio.to_thread(client.open_session, consent_given=consent_given)
+    if not opened.ok:
+        raise PipecatUnavailable(
+            f"the booking system would not open a session (status {opened.status_code})"
+        )
+
     connection = SmallWebRTCConnection(list(ICE_SERVERS))
     await connection.initialize(sdp=sdp, type=sdp_type)
 
@@ -366,12 +388,12 @@ async def start_call(
     # The call runs for as long as the caller stays; the offer must be answered
     # now. Detached deliberately — awaiting it here would hold the HTTP request
     # open for the length of the conversation.
-    asyncio.create_task(run_call(config, connection))
+    asyncio.create_task(run_call(config, connection, client))
 
     return connection.get_answer(), connection
 
 
-async def run_call(config: PipelineConfig, connection):  # pragma: no cover
+async def run_call(config: PipelineConfig, connection, client=None):  # pragma: no cover
     """Serve one call, from a connected browser to a hung-up one.
 
     Not covered by tests, and it should not pretend to be: everything here is a
@@ -391,7 +413,7 @@ async def run_call(config: PipelineConfig, connection):  # pragma: no cover
     # call, it was `PipelineWorker: timeout setting the pipeline up`, which reads
     # like a Pipecat problem and is not.
     pipeline, transport, _context = await asyncio.to_thread(
-        build_pipeline, config, connection=connection
+        build_pipeline, config, connection=connection, client=client
     )
 
     worker = PipelineWorker(

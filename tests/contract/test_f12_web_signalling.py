@@ -31,11 +31,18 @@ def minted():
     return tokens.mint()
 
 
-def _offer(room: str, token: str) -> dict[str, str]:
-    """What the page posts: the room it was given, the token that opens it, and
-    the SDP offer its own `RTCPeerConnection` produced.
+def _offer(room: str, token: str, *, consent: object = True) -> dict[str, object]:
+    """What the page posts: the room it was given, the token that opens it, the
+    SDP its own `RTCPeerConnection` produced, and the consent the person gave
+    before the microphone was touched (C-27).
     """
-    return {"room": room, "token": token, "sdp": "v=0 a=audio", "type": "offer"}
+    return {
+        "room": room,
+        "token": token,
+        "sdp": "v=0 a=audio",
+        "type": "offer",
+        "consent": consent,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -295,6 +302,8 @@ def test_an_offer_without_a_good_token_is_refused(web):
         # that treats "no SDP" as "empty SDP" builds a peer connection for it.
         b'{"room": "r", "token": "t"}',
         b'{"room": "r", "token": "t", "sdp": "v=0"}',
+        # An offer with everything but the consent that makes it a call.
+        b'{"room": "r", "token": "t", "sdp": "v=0", "type": "offer"}',
     ],
 )
 def test_a_malformed_offer_is_the_same_refusal(web, body):
@@ -461,19 +470,43 @@ def test_a_minted_token_reaches_the_offer_endpoint(fronted):
 
 @pytest.mark.skipif(
     importlib.util.find_spec("pipecat") is None,
-    reason="a malformed SDP only reaches the parser when the audio stack is here",
+    reason="the session gate is only reached when the audio stack is here",
 )
-def test_a_malformed_sdp_is_refused_the_way_a_bad_token_is(fronted):
-    """The oracle this closes: an SDP that crashed the parser came back as a
-    500, and a caller who can tell 500 from 403 has learned their token was the
-    good part.
+def test_a_call_that_cannot_get_a_session_never_becomes_one(fronted):
+    """The session is opened before a peer connection exists, so an offer that
+    cannot get one stops there — before the SDP is parsed, before a bot is
+    built, and before the browser is told it is connected.
+
+    Here the application is unreachable from the pipeline's own client, which is
+    the same shape as the application being down in production: 503, and no
+    half-open call left behind.
     """
     web, _ = fronted
     minted = web.post("/web/room-token").json()
-    good = web.post("/api/offer", json=_offer(minted["room"], minted["token"]))
-    bad = web.post("/api/offer", json=_offer(minted["room"], "forged.forged"))
-    assert good.status_code == 403
-    assert good.json() == bad.json() == server.REFUSED_BODY
+    response = web.post("/api/offer", json=_offer(minted["room"], minted["token"]))
+    assert response.status_code == 503
+    assert response.json() == server.UNAVAILABLE_BODY
+
+
+def test_a_parser_error_is_a_refusal_and_never_a_traceback(fronted, monkeypatch):
+    """An SDP is a stranger's string and it goes to a parser. A malformed one
+    came back as `ValueError: invalid literal for int()` and escaped as a 500 —
+    a crash, and worse, an oracle: a caller who can tell 500 from 403 has
+    learned their token was the good part.
+    """
+    web, _ = fronted
+
+    async def _explode(*_args, **_kwargs):
+        raise ValueError("invalid literal for int() with base 10: 'nonsense'")
+
+    monkeypatch.setattr(server, "start_call", _explode)
+
+    minted = web.post("/web/room-token").json()
+    crashed = web.post("/api/offer", json=_offer(minted["room"], minted["token"]))
+    refused = web.post("/api/offer", json=_offer(minted["room"], "forged.forged"))
+
+    assert crashed.status_code == refused.status_code == 403
+    assert crashed.json() == refused.json() == server.REFUSED_BODY
 
 
 @pytest.mark.parametrize(
@@ -669,3 +702,32 @@ def test_the_page_has_words_for_busy():
         else ""
     )
     assert "busy" in page
+
+
+@pytest.mark.parametrize("consent", [False, None, "yes", 1, "true"])
+def test_an_offer_that_does_not_carry_consent_is_not_a_call(fronted, consent):
+    """C-27. Only `true` counts — a truthy string or a 1 is a client being
+    imprecise at best, and the microphone is not something to be imprecise about.
+    """
+    web, _ = fronted
+    minted = web.post("/web/room-token").json()
+    response = web.post(
+        "/api/offer",
+        json=_offer(minted["room"], minted["token"], consent=consent),
+    )
+    assert response.status_code == 403
+    assert response.json() == server.REFUSED_BODY
+
+
+def test_consent_is_refused_the_same_way_a_bad_token_is(fronted):
+    """A prober must not be able to separate "your token was fine, you forgot
+    the consent flag" from "your token was refused".
+    """
+    web, _ = fronted
+    minted = web.post("/web/room-token").json()
+    no_consent = web.post(
+        "/api/offer", json=_offer(minted["room"], minted["token"], consent=False)
+    )
+    bad_token = web.post("/api/offer", json=_offer(minted["room"], "forged.forged"))
+    assert no_consent.status_code == bad_token.status_code == 403
+    assert no_consent.json() == bad_token.json()

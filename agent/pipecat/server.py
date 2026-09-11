@@ -193,7 +193,17 @@ def create_app(
             token = str(payload["token"])
             sdp = str(payload["sdp"])
             sdp_type = str(payload["type"])
+            consent = payload["consent"]
         except (ValueError, KeyError, TypeError):
+            return JSONResponse(REFUSED_BODY, status_code=403)
+
+        if consent is not True:
+            # C-27, carried rather than assumed. The browser is the only place
+            # that can know whether a person agreed, because it is the only
+            # place a microphone was asked for — and a spoken disclosure is not
+            # consent on the web, since by the time it is spoken the microphone
+            # is already live. An offer that does not carry it is not a call.
+            log.info("offer_without_consent")
             return JSONResponse(REFUSED_BODY, status_code=403)
 
         if len(room) > MAX_ROOM_LENGTH or len(token) > MAX_TOKEN_LENGTH:
@@ -233,7 +243,11 @@ def create_app(
 
         try:
             answer, connection = await start_call(
-                config, sdp=sdp, sdp_type=sdp_type, on_closed=_released
+                config,
+                sdp=sdp,
+                sdp_type=sdp_type,
+                consent_given=consent,
+                on_closed=_released,
             )
         except Exception as exc:  # noqa: BLE001 - deliberately broad, see below
             if not isinstance(exc, PipecatUnavailable):
