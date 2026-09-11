@@ -11,9 +11,10 @@ Vapi phone agent, cancellation, idempotency, and the append-only audit trail).
 
 **F16 — deployment hardening is not built.** Its correlation-id half is: every
 response carries `x-correlation-id`, failures included. The rest is not — no
-HSTS, no CORS restriction, no security headers, and `gitleaks` is neither
-installed here nor run over the history, so that acceptance criterion is
-unverified rather than met. Do not treat this as deployable as it stands.
+HSTS, no CORS restriction, no security headers. `gitleaks` is now wired up both
+ways — over the full history in CI (`.github/workflows/ci.yml`) and over the
+staged diff pre-commit (`.pre-commit-config.yaml`, one `pre-commit install` per
+clone). Do not treat this as deployable as it stands.
 
 ---
 

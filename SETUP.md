@@ -205,6 +205,19 @@ is trusted with.
 `.env` and every `.env.*` variant are gitignored, and `gitleaks` runs pre-commit
 and in CI. No key is ever printed by any script here — presence and length only.
 
+The pre-commit half needs installing once per clone — a hook file is not in the
+repository, so a fresh clone has no hooks until you ask for them:
+
+```bash
+uv tool install pre-commit
+pre-commit install
+```
+
+`.pre-commit-config.yaml` also carries the three trust-boundary guards, and runs
+the adversarial suite when a commit touches `app/security/` or `app/tools/`. CI
+(`.github/workflows/ci.yml`) runs all of it again on the server, because a hook
+that `--no-verify` can skip is a convenience, not a control.
+
 ---
 
 ## When something is wrong

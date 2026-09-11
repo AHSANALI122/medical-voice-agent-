@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only. Nothing here writes to the repository, and the job that walks the
+# whole history looking for secrets is the last place that should be holding a
+# token which can push.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guards:
+    name: Trust-boundary guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Every check in this job is stdlib-only and reads the source with `ast`
+      # rather than importing it, so it runs before a single dependency is
+      # installed. A boundary violation is reported in seconds instead of after
+      # a full resolve — and it cannot be defeated by code that fails to import.
+
+      - name: Import boundary — agent/ and tester/ hold an HTTP client only (C-19, C-13)
+        run: python scripts/check_import_boundary.py
+
+      - name: SQL interpolation — parameterized only (C-11)
+        run: python scripts/check_sql_interpolation.py
+
+      - name: Client bundle — nothing shipped to a browser holds a key (C-16)
+        run: python scripts/check_client_bundle.py
+
+      - name: Only .env.example is tracked
+        shell: bash
+        run: |
+          tracked=$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$' || true)
+          if [ -n "$tracked" ]; then
+            echo "these are tracked and must not be:"
+            echo "$tracked"
+            exit 1
+          fi
+          echo "env files: only .env.example is tracked"
+
+  tests:
+    name: Tests and evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # --locked, not --frozen: a lockfile that no longer matches pyproject.toml
+      # fails the build rather than being silently re-resolved. CI must install
+      # the same versions the developer tested against.
+      #
+      # The tester group is deliberately left out. Its testable parts — signing,
+      # redaction, the audit reader, the production guard — import no Streamlit,
+      # so the suite covers them without it, and the API is proven not to need
+      # the tester in order to run.
+      - name: Install the pinned dependency set
+        run: uv sync --locked --group dev
+
+      # First, and on their own, because these are the ones that gate the build.
+      # If the existence oracle is back or a reference can be brute-forced, that
+      # should be the first line of the log, not something found on page three.
+      - name: Adversarial suite — these gate the build
+        run: uv run pytest tests/adversarial -q
+
+      - name: Full suite
+        run: uv run pytest -q
+
+      # The pytest gate for the evals is tests/adversarial/test_f11_evals.py;
+      # this step exists so the 25 conversations can be read as a report in the
+      # run summary rather than as a dot per test. stderr carries the structured
+      # application log and is dropped here — it is noise in a summary, and the
+      # redaction it goes through is tested in tests/unit/test_f11_redaction.py.
+      - name: Eval suite report (F11)
+        shell: bash
+        run: |
+          set +e
+          uv run python -m evals 2>/dev/null | tee evals.txt
+          status=${PIPESTATUS[0]}
+          {
+            echo '## Eval suite (F11)'
+            echo
+            echo '```'
+            cat evals.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history. A key that was committed and deleted three
+          # commits later is still a leaked key — the fix is rotation, and this
+          # scan is how you learn you need to rotate.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Free for personal and public repositories. Only needed if this repo
+          # ever moves under an organisation account.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

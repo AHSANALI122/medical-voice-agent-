@@ -1,0 +1,91 @@
+# The first of two passes. CI (.github/workflows/ci.yml) is the second, and it
+# is the one that decides — a hook on a developer's machine can be skipped with
+# --no-verify and does not exist at all on a machine that never ran
+# `pre-commit install`. The point of this file is cheaper failure: a leaked key
+# caught here is a key you never rotated, and a boundary violation caught here
+# is a violation that never reached a branch.
+#
+# Install once per clone:
+#     uv tool install pre-commit
+#     pre-commit install
+#
+# Deliberately kept fast. Nothing here takes more than a second except the
+# adversarial suite, and that one only runs when the files it guards change.
+
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  # Scans the staged diff, not the worktree, and redacts what it finds — a
+  # secret must not be printed a second time by the tool that caught it.
+  #
+  # `language: golang` builds gitleaks from source on first install; pre-commit
+  # fetches a Go toolchain itself if the machine has none. If that ever fails
+  # here, install the gitleaks binary and switch this to `id: gitleaks-system`.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # Both CI workflows and this file are YAML now; a typo here would
+      # otherwise be discovered by the workflow silently not running.
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+
+  - repo: local
+    hooks:
+      # `.env` is gitignored, but an ignore file is a default, not a control —
+      # `git add -f` walks straight past it. This is the control.
+      - id: no-env-file
+        name: .env must never be committed
+        language: fail
+        entry: >-
+          this file holds real keys and must never be committed;
+          only .env.example belongs in the repository
+        files: '(^|/)\.env($|\.)'
+        exclude: '(^|/)\.env\.example$'
+
+      # The same three guards CI runs, in the same order, against the same
+      # scripts — there is one definition of each check and both passes call it.
+      # They parse with `ast` and import nothing, so `python` here is any Python
+      # 3 on PATH; no project environment is needed and none is built.
+      #
+      # `files:` decides when a hook runs, not what it scans: each script always
+      # walks its whole root. Editing the script itself re-runs it too.
+      - id: import-boundary
+        name: agent/ and tester/ hold an HTTP client only (C-19, C-13)
+        language: system
+        entry: python scripts/check_import_boundary.py
+        pass_filenames: false
+        files: '^(agent|tester)/.*\.py$|^scripts/check_import_boundary\.py$'
+
+      - id: sql-interpolation
+        name: parameterized SQL only (C-11)
+        language: system
+        entry: python scripts/check_sql_interpolation.py
+        pass_filenames: false
+        files: '^app/.*\.py$|^scripts/check_sql_interpolation\.py$'
+
+      - id: client-bundle
+        name: nothing shipped to a browser holds a key (C-16)
+        language: system
+        entry: python scripts/check_client_bundle.py
+        pass_filenames: false
+        files: '^agent/pipecat/web/|^scripts/check_client_bundle\.py$'
+
+      # CLAUDE.md: run the adversarial suite before any commit touching
+      # app/security/ or app/tools/. That is this hook. It takes about half a
+      # minute, which is why it is scoped to exactly those two directories
+      # rather than always_run — a hook people are tempted to skip protects
+      # nothing.
+      - id: adversarial-suite
+        name: adversarial suite (app/security and app/tools)
+        language: system
+        entry: uv run pytest tests/adversarial -q
+        pass_filenames: false
+        files: '^app/(security|tools)/'
