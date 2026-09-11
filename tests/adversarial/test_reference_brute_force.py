@@ -28,7 +28,16 @@ from app.models import (
     RateLimitBucket,
 )
 
-WRONG_GUESSES = ("0001", "0002", "0003", "0004", "0005")
+
+def _wrong_guesses(reference: str) -> list[str]:
+    """Five guesses that cannot be the real reference.
+
+    A hardcoded tuple collides with a randomly issued reference about once in
+    two thousand runs, and when it does the failure reads as "the lockout is
+    broken" rather than "the test guessed right". A brute-force test must not
+    be the thing that brute-forces successfully.
+    """
+    return [f"{n:04d}" for n in range(6) if f"{n:04d}" != reference][:5]
 
 
 def _cancel(api, session_id, *, name, day, reference):
@@ -44,8 +53,7 @@ def _cancel(api, session_id, *, name, day, reference):
 
 
 def _burn_the_budget(api, session_id, record):
-    for guess in WRONG_GUESSES:
-        assert guess != record["reference"]
+    for guess in _wrong_guesses(record["reference"]):
         assert (
             _cancel(
                 api, session_id, name=record["name"], day=record["date"], reference=guess
