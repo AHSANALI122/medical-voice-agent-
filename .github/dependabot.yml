@@ -1,0 +1,29 @@
+# Pins in .github/workflows/ci.yml are commit SHAs, which is the point — nobody
+# can move them out from under us. The cost of that is they never move at all,
+# including the time the move is a fix. This is what pays that cost: a weekly
+# pull request that bumps the SHA and the version comment beside it, which lands
+# like any other change and has to go green before it merges.
+#
+# Two things it does not cover. The gitleaks `rev` in .pre-commit-config.yaml —
+# no ecosystem exists for pre-commit hooks; run `pre-commit autoupdate` for that.
+# And the Python dependencies in uv.lock, deliberately: the lockfile is what CI
+# installs with --locked, and a weekly churn of it is noise nobody reads. Bump
+# those when there is a reason to.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # One pull request for all of them. Four separate ones for four SHA bumps
+    # is how a review turns into a rubber stamp.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: CI
