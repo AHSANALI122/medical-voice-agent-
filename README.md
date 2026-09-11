@@ -3,10 +3,17 @@
 A voice agent for medical appointment booking, designed on the assumption that
 the language model driving it is compromised.
 
-**Status:** F0–F10 implemented (schema, slot engine, state machine, tool
-endpoints, request authentication, the booking-reference authority spine, entity
-resolution, relative dates, abuse budgets, the Streamlit tester, and the safety
-pre-filter). F11–F17 are specified in `spec.md` and not yet built.
+**Status:** F0–F15 and F17 implemented (schema, slot engine, state machine,
+tool endpoints, request authentication, the booking-reference authority spine,
+entity resolution, relative dates, abuse budgets, the Streamlit tester, the
+safety pre-filter, observability and the eval suite, the Pipecat web agent, the
+Vapi phone agent, cancellation, idempotency, and the append-only audit trail).
+
+**F16 — deployment hardening is not built.** Its correlation-id half is: every
+response carries `x-correlation-id`, failures included. The rest is not — no
+HSTS, no CORS restriction, no security headers, and `gitleaks` is neither
+installed here nor run over the history, so that acceptance criterion is
+unverified rather than met. Do not treat this as deployable as it stands.
 
 ---
 
@@ -92,16 +99,98 @@ moment it was disclosed in. Audit rows are read straight from the database over 
 read-only connection rather than through an endpoint, because an `/audit`
 endpoint built for the tester would be exactly the extra surface F9 forbids.
 
+### A walk through the UI
+
+Every button is one signed call to `/tools/*` and nothing else. The UI holds no
+rule about who may do what — it collects a field, posts it, and renders what
+came back. Reading it is therefore a reasonable way to read the tool surface.
+
+**The sidebar** gates the rest. `Start a call` posts `create_session` and hands
+back a session id, a state, and the disclosure the caller must hear. Until that
+lands the page stops, because every other tool needs a session. It also mints a
+fresh call id, which is what the per-call budget is keyed on.
+
+**Tab 1 — Every turn.** Both tools here run on *every* turn rather than
+belonging to a flow, which is why they sit above the other two tabs.
+`screen_turn` is the F10 pre-filter: pure Python, no provider in its path. Type
+a sentence about chest pain and the verdict comes back `emergency` with
+`blocks_flow` set, and the session moves to `ESCALATED_EMERGENCY` — after which
+booking and cancelling are refused on that session, which is the point.
+`resolve_date` turns "next Tuesday" into a date in the clinic's timezone, on the
+server; an ambiguous phrase returns a clarification rather than a guess.
+
+**Tab 2 — Book.** Three steps, and the order is load-bearing:
+
+1. `search_doctors` by specialty or by name, returning a list numbered from 1.
+   Two doctors matching one name comes back `ambiguous`, and the server declines
+   to pick — it never names both aloud either.
+2. `get_available_slots` for a **doctor ordinal**, returning slots numbered
+   from 1.
+3. `book_appointment` for a **slot ordinal** and a patient name.
+
+No tool takes a database identifier. An ordinal means "the nth item in the list
+this server offered *this session*, a moment ago" — it is resolved against the
+offer stored on the session, not against a table. Skip step 2, or pass an
+ordinal outside the offered list, and the call is refused with 403 before
+anything is written. That is not a validation error; it is the offer-scoping
+check that `evals/` exercises as `attack_idor_through_an_unoffered_ordinal`.
+
+On success the reference appears once, in green. It is the only time it is ever
+shown.
+
+**Tab 3 — Cancel.** Name, date and reference, matched in one server-side step.
+
+The digit buffer above the reference field models the failure it exists for: on
+a phone, people read four digits with a pause in the middle, and VAD cuts the
+turn. `append_reference_digits` accumulates fragments server-side, so `"77"`
+then `"1"` then `"3"` arrives as a readback of `7-7-1-3` that survives the cut.
+Two exhausted retries hand off rather than looping.
+
+Then attempt a cancellation, and attempt it wrong several times — wrong name,
+wrong date, wrong reference, a patient who never existed. Every one of them
+returns the same 403 with the same sentence. That uniformity is the feature: a
+caller who cannot tell which field was wrong cannot use the endpoint to discover
+what exists.
+
+**The right panel** is where the two audiences separate. The call log is what a
+transcript may hold, so the reference is masked in it. The audit rows below are
+what the transcript may not: `cancel_appointment · denied · no_match`, one row
+per attempt, allowed or denied. The caller gets one uniform sentence; the reason
+lives only here. When something is refused and you want to know why, this panel
+is the answer and the response body never will be.
+
+One caveat on that panel: it opens the SQLite file directly, so it only works
+when the tester and the API share a machine. Elsewhere it reports that the audit
+log is unavailable rather than inventing an endpoint to fetch it.
+
+**A round trip, in order:** start a call; screen an emergency and watch the flow
+stop; start a fresh call; search, get slots, book; note the reference; attempt a
+cancellation with the wrong reference, then the wrong name, then the wrong date,
+and compare the three replies; cancel properly; then read the audit panel, which
+distinguishes every one of those attempts that the caller could not.
+
 One thing that surprises everyone once: the tester shares an IP with you, and
 F8 refuses a fourth call from one source in 24 hours. That is the spec's number
 and it is not softened for the tester. Raise it locally instead —
 `MAX_SESSIONS_PER_IP_PER_DAY=50` in your `.env`. Every limit is configuration;
 none of them is a code path.
 
+Raising it locally cannot change what the suite asserts. `tests/conftest.py`
+pins the F8 budgets into the environment, which outranks `.env`, so the
+adversarial tests run on the numbers `app/config.py` ships no matter what your
+own file says — and `test_the_suite_runs_on_the_budgets_the_code_ships` fails if
+that pin ever drifts from those defaults. A security suite that means something
+different on each machine would be worse than one that is merely strict.
+
+The budgets are counted in the database and survive a reconnect, deliberately
+(C-23). The database itself does not: delete `data/voicebook.db` and restart,
+and the budgets are gone with it — which is the intended way out of an exhausted
+window, not a workaround.
+
 ## Checks
 
 ```bash
-uv run pytest                                    # 569 tests
+uv run pytest                                    # 600 tests
 uv run pytest tests/adversarial                  # required before any commit
                                                  # touching app/security or app/tools
 uv run python -m evals                           # the 25 scripted conversations
